@@ -1,0 +1,62 @@
+---
+- name: Linux Hardening Audit
+  hosts: all
+  gather_facts: false
+  become: true
+
+  vars:
+    remote_script: /tmp/linux_hardening_audit.sh
+    report_name: "hardening-{{ inventory_hostname }}.txt"
+
+  tasks:
+
+    - name: IDENTIFIER
+      raw: echo "Linux Hardening Audit Deployment"
+
+    - name: Copy audit script
+      copy:
+        src: files/linux_hardening_audit.sh
+        dest: "{{ remote_script }}"
+        mode: '0755'
+
+    - name: Execute audit
+      shell: |
+        {{ remote_script }} /tmp/{{ report_name }}
+      register: audit_result
+      changed_when: false
+      failed_when: false
+
+    - name: Show stdout
+      debug:
+        var: audit_result.stdout_lines
+
+    - name: Check report exists
+      stat:
+        path: "/tmp/{{ report_name }}"
+      register: report
+
+    - name: Fetch report
+      fetch:
+        src: "/tmp/{{ report_name }}"
+        dest: reports/
+        flat: yes
+      when: report.stat.exists
+
+    - name: Remove remote report
+      file:
+        path: "/tmp/{{ report_name }}"
+        state: absent
+
+    - name: Remove audit script
+      file:
+        path: "{{ remote_script }}"
+        state: absent
+
+    - name: Print report
+      shell: cat /tmp/{{ report_name }}
+      register: report_output
+      changed_when: false
+
+    - debug:
+        msg: "{{ report_output.stdout_lines }}"
+        
