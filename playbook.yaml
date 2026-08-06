@@ -10,53 +10,41 @@
 
   tasks:
 
-    - name: IDENTIFIER
-      raw: echo "Linux Hardening Audit Deployment"
-
     - name: Copy audit script
       copy:
-        src: files/linux_hardening_audit.sh
-        dest: "{{ remote_script }}"
-        mode: '0755'
+      src: files/linux_hardening_audit.sh
+      dest: /tmp/linux_hardening_audit.sh
+      mode: "0755"
 
     - name: Execute audit
-      shell: |
-        {{ remote_script }} /tmp/{{ report_name }}
+      shell: "{{ remote_script }} /tmp/{{ report_name }}"
       register: audit_result
       changed_when: false
-      failed_when: false
 
-    - name: Show stdout
+    - name: Show execution result
       debug:
         var: audit_result.stdout_lines
 
-    - name: Check report exists
-      stat:
-        path: "/tmp/{{ report_name }}"
-      register: report
+    - name: Display report
+      shell: cat /tmp/{{ report_name }}
+      register: report_output
+      changed_when: false
+
+    - debug:
+        var: report_output.stdout_lines
 
     - name: Fetch report
       fetch:
         src: "/tmp/{{ report_name }}"
         dest: reports/
         flat: yes
-      when: report.stat.exists
 
-    - name: Remove remote report
+    - name: Cleanup report
       file:
         path: "/tmp/{{ report_name }}"
         state: absent
 
-    - name: Remove audit script
+    - name: Cleanup script
       file:
         path: "{{ remote_script }}"
         state: absent
-
-    - name: Print report
-      shell: cat /tmp/{{ report_name }}
-      register: report_output
-      changed_when: false
-
-    - debug:
-        msg: "{{ report_output.stdout_lines }}"
-        
