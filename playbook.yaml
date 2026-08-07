@@ -187,9 +187,8 @@
         {{ ansible_user }}@{{ inventory_hostname }}:/opt/linux_hardening_audit2_temp/hardening-{{ inventory_hostname }}-*.txt 
         {{ local_report_path }}
       changed_when: true
-            # Ditambahkan agar jika zabbixserver masih down, playbook tetap lanjut memproses lst-srv-henry sampai MinIO
+      # Pastikan posisi spasi di bawah ini sejajar lurus dengan changed_when di atas
       ignore_unreachable: true
-
 
 #########################################################################
 # ENSURE MC CLIENT READY DI VM ANSIBLE (STORAGE_HOST, RAW)
@@ -276,15 +275,13 @@
 
     - name: Upload report to MinIO using mc (raw)
       delegate_to: "{{ storage_host }}"
-      # Kita langsung tembak URL MinIO Server-nya tanpa membuat alias terlebih dahulu
-      # Ganti minio_endpoint_url, minio_access_key, dan minio_secret_key dengan variabel asli Anda
+      # Jalur biner diubah ke /usr/local/bin/mc agar pasti ditemukan oleh sistem
       raw: >
-        mc cp --insecure "{{ local_report_path }}" 
+        /usr/local/bin/mc cp --insecure "{{ local_report_path }}" 
         "http://{{ minio_access_key }}:{{ minio_secret_key }}@10.64.1.2:9000/{{ minio_bucket }}/{{ report_name }}"
       register: upload_result
       changed_when: true
       when: not is_duplicate
-
 
     - name: Show upload result
       debug:
@@ -292,12 +289,13 @@
       when: not is_duplicate
 
 #########################################################################
-# VERIFY UPLOAD (RAW DI STORAGE_HOST)
+# VERIFY UPLOAD (RAW DI STORAGE_HOST VIA URL DIRECT)
 #########################################################################
 
     - name: Verify object exists in MinIO bucket (raw)
       delegate_to: "{{ storage_host }}"
-      raw: "{{ mc_binary_path }} stat {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}"
+      # Disinkronkan menggunakan parameter stat langsung ke URL MinIO tanpa alias
+      raw: "/usr/local/bin/mc stat --insecure http://{{ minio_access_key }}:{{ minio_secret_key }}@10.64.1.2:9000/{{ minio_bucket }}/{{ report_name }}"
       register: mc_stat_result
       changed_when: false
       failed_when: false
@@ -306,6 +304,7 @@
       fail:
         msg: "Upload report ke MinIO gagal untuk {{ report_name }}."
       when: mc_stat_result.rc is not defined or mc_stat_result.rc != 0
+
 
 #########################################################################
 # CLEANUP REMOTE (RAW, TARGET HOST)
