@@ -8,6 +8,8 @@
 
     #############################################
     # Script Hardening
+    # NOTE: jika script sudah ada di host target,
+    # copy akan di-skip otomatis (idempoten)
     #############################################
 
     script_name: linux_hardening_audit2.sh
@@ -22,6 +24,14 @@
 
     local_report_dir: "/opt/linux_hardening_audit2_temp"
     local_report_path: "{{ local_report_dir }}/{{ report_name }}"
+
+    #############################################
+    # MinIO Client (mc)
+    # NOTE: mc sudah diinstall & alias sudah dikonfigurasi
+    # manual di VM Ansible ini, contoh:
+    #   mc alias set minio-server-hardening-linux \
+    #     http://10.64.1.2:9000 <access_key> <secret_key>
+    #############################################
 
     minio_bucket: "hardening-linux"
     minio_alias: "minio-server-hardening-linux"
@@ -45,13 +55,44 @@
           - "========================================"
 
 #########################################################################
-# COPY SCRIPT
+# ENSURE SCRIPT EXISTS ON TARGET (COPY HANYA JIKA BELUM ADA)
 #########################################################################
 
-    - name: Copy hardening script
+    # Jika script sudah ada di host target (mis. sudah pernah di-deploy
+    # manual seperti di lst-svr-henry), copy DI-SKIP.
+    # Jika belum ada, script akan di-copy dari AWX Project files/.
+
+    - name: Check if hardening script already exists on target host
+      stat:
+        path: "{{ remote_script }}"
+      register: script_check_before
+
+    - name: Copy hardening script from AWX Project (jika belum ada di host)
       copy:
-        src: "../files/{{ script_name }}"
+        src: "files/{{ script_name }}"
         dest: "{{ remote_script }}"
+        owner: root
+        group: root
+        mode: "0755"
+      when: not script_check_before.stat.exists
+
+    - name: Verify hardening script exists on target host
+      stat:
+        path: "{{ remote_script }}"
+      register: script_check_after
+
+    - name: Stop if hardening script still not found
+      fail:
+        msg: >
+          Script hardening tidak ditemukan di {{ remote_script }} pada host
+          {{ ansible_hostname }}, dan gagal di-copy dari AWX Project.
+          Pastikan file {{ script_name }} ada di folder files/ pada repo,
+          atau taruh manual di path tersebut pada host target.
+      when: not script_check_after.stat.exists
+
+    - name: Ensure script is executable
+      file:
+        path: "{{ remote_script }}"
         owner: root
         group: root
         mode: "0755"
