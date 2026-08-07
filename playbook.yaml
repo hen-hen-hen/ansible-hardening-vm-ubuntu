@@ -1,13 +1,15 @@
 ---
 - name: Linux Hardening Audit RAW Mode - MinIO Upload
-  hosts: hardening_target
+
+  hosts: all
+
   become: true
+
   gather_facts: false
 
-  any_errors_fatal: false
-  max_fail_percentage: 100
 
   vars:
+
 
     #############################################
     # Script Hardening
@@ -59,17 +61,39 @@
     minio_secret_key: "{{ vault_minio_secret_key }}"
 
 
+
   pre_tasks:
 
 
+    #############################################
+    # SKIP STORAGE HOST
+    #############################################
+
+    - name: Skip lst-svr-henry storage server
+
+      meta: end_host
+
+      when:
+
+        - inventory_hostname == storage_host
+
+
+
+    #############################################
+    # HOST INFORMATION
+    #############################################
+
     - name: Identifier
+
       raw: |
-        echo "Linux Hardening Audit RAW Mode"
+        echo "Linux Hardening Audit RAW Mode Started"
 
       changed_when: false
 
 
+
     - name: Get hostname
+
       raw: |
         hostname
 
@@ -78,7 +102,9 @@
       changed_when: false
 
 
-    - name: Get IP
+
+    - name: Get IP Address
+
       raw: |
         hostname -I | awk '{print $1}'
 
@@ -87,7 +113,9 @@
       changed_when: false
 
 
-    - name: Get OS
+
+    - name: Get OS Information
+
       raw: |
         cat /etc/os-release |
         grep -E '^(NAME|VERSION)' |
@@ -98,7 +126,9 @@
       changed_when: false
 
 
-    - name: Get timestamp
+
+    - name: Get Timestamp
+
       raw: |
         date '+%F %T'
 
@@ -107,9 +137,13 @@
       changed_when: false
 
 
-    - name: Display information
+
+    - name: Display host information
+
       debug:
+
         msg:
+
           - "================================="
           - "Inventory : {{ inventory_hostname }}"
           - "Hostname  : {{ raw_hostname.stdout | trim }}"
@@ -123,7 +157,8 @@
   tasks:
 
 
-    - name: Linux Hardening Audit
+    - name: Linux Hardening Audit Block
+
 
       block:
 
@@ -133,6 +168,7 @@
         #########################################
 
         - name: Create working directory
+
           raw: |
             mkdir -p {{ remote_script_dir }}
 
@@ -152,7 +188,7 @@
 
 
 
-        - name: Verify script
+        - name: Verify script exists
 
           raw: |
             test -f {{ remote_script }} && echo OK || echo FAILED
@@ -197,7 +233,7 @@
             var: audit_result.stdout_lines
 
         #########################################
-        # DETECT TXT REPORT TERBARU
+        # DETECT TXT REPORT
         #########################################
 
         - name: Detect latest TXT report
@@ -218,11 +254,11 @@
 
 
 
-        - name: Check report detected
+        - name: Validate TXT report exists
 
           fail:
 
-            msg: "Report TXT tidak ditemukan"
+            msg: "Report TXT tidak ditemukan setelah script selesai"
 
           when:
 
@@ -230,13 +266,13 @@
 
 
 
-        - name: Show detected report
+        - name: Display detected report
 
           debug:
 
             msg:
 
-              - "Detected report:"
+              - "Report ditemukan:"
               - "{{ detected_report.stdout | trim }}"
 
 
@@ -252,10 +288,10 @@
 
 
 
-        - name: Verify report
+        - name: Verify renamed report
 
           raw: |
-            test -f {{ report_path }} && echo OK || echo FAILED
+            test -f {{ report_path }} && echo EXISTS || echo FAILED
 
           register: report_verify
 
@@ -263,7 +299,7 @@
 
 
 
-        - name: Stop if report rename failed
+        - name: Stop if rename failed
 
           fail:
 
@@ -279,7 +315,7 @@
         # READ REPORT
         #########################################
 
-        - name: Read report
+        - name: Read report content
 
           raw: |
             cat {{ report_path }}
@@ -299,10 +335,19 @@
 
 
         #########################################
-        # COPY REPORT TO STORAGE HOST
+        # COPY REPORT TO lst-svr-henry
         #########################################
 
-        - name: Copy report to lst-svr-henry
+        - name: Create storage directory
+
+          delegate_to: "{{ storage_host }}"
+
+          raw: |
+            mkdir -p {{ local_report_dir }}
+
+
+
+        - name: Copy report to storage host
 
           raw: |
             scp \
@@ -310,7 +355,7 @@
             {{ report_path }} \
             {{ storage_host }}:{{ local_report_path }}
 
-          register: copy_report
+          register: copy_result
 
 
 
@@ -319,23 +364,23 @@
           delegate_to: "{{ storage_host }}"
 
           raw: |
-            test -f {{ local_report_path }} && echo OK || echo FAILED
+            test -f {{ local_report_path }} && echo EXISTS || echo FAILED
 
-          register: storage_verify
+          register: storage_report_verify
 
           changed_when: false
 
 
 
-        - name: Stop if copy failed
+        - name: Fail copy report
 
           fail:
 
-            msg: "Report gagal dicopy ke {{ storage_host }}"
+            msg: "Copy report ke {{ storage_host }} gagal"
 
           when:
 
-            - "'FAILED' in storage_verify.stdout"
+            - "'FAILED' in storage_report_verify.stdout"
 
 
 
@@ -356,7 +401,7 @@
 
 
 
-        - name: Show MinIO result
+        - name: Show MinIO upload result
 
           debug:
 
@@ -368,7 +413,7 @@
         # VERIFY MINIO
         #########################################
 
-        - name: Verify MinIO object
+        - name: Verify object on MinIO
 
           delegate_to: "{{ storage_host }}"
 
@@ -382,11 +427,11 @@
 
 
 
-        - name: Fail MinIO verification
+        - name: Fail if MinIO upload failed
 
           fail:
 
-            msg: "Upload MinIO gagal {{ report_name }}"
+            msg: "File {{ report_name }} tidak ditemukan di MinIO"
 
           when:
 
@@ -398,7 +443,7 @@
         # SUMMARY
         #########################################
 
-        - name: Summary
+        - name: Job Summary
 
           debug:
 
@@ -460,7 +505,7 @@
         # KEEP REPORT
         #######################################
 
-        - name: Keep report information
+        - name: Keep report
 
           debug:
 
@@ -468,4 +513,4 @@
 
               - "Report tidak dihapus"
               - "Target : {{ report_path }}"
-              - "Storage : {{ local_report_path }}"            
+              - "Storage: {{ local_report_path }}"
