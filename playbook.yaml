@@ -187,6 +187,8 @@
         {{ ansible_user }}@{{ inventory_hostname }}:/opt/linux_hardening_audit2_temp/hardening-{{ inventory_hostname }}-*.txt 
         {{ local_report_path }}
       changed_when: true
+            # Ditambahkan agar jika zabbixserver masih down, playbook tetap lanjut memproses lst-srv-henry sampai MinIO
+      ignore_unreachable: true
 
 
 #########################################################################
@@ -269,17 +271,20 @@
       when: is_duplicate
 
 #########################################################################
-# UPLOAD REPORT TO MINIO (RAW DI STORAGE_HOST)
+# UPLOAD REPORT TO MINIO USING MC (RAW - LANGSUNG KE ENDPOINT URL)
 #########################################################################
 
-    - name: Upload report to MinIO using mc on storage_host (raw)
+    - name: Upload report to MinIO using mc (raw)
       delegate_to: "{{ storage_host }}"
+      # Kita langsung tembak URL MinIO Server-nya tanpa membuat alias terlebih dahulu
+      # Ganti minio_endpoint_url, minio_access_key, dan minio_secret_key dengan variabel asli Anda
       raw: >
-        {{ mc_binary_path }} cp {{ local_report_path }}
-        {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}
+        mc cp --insecure "{{ local_report_path }}" 
+        "http://{{ minio_access_key }}:{{ minio_secret_key }}@10.64.1.2:9000/{{ minio_bucket }}/{{ report_name }}"
       register: upload_result
       changed_when: true
       when: not is_duplicate
+
 
     - name: Show upload result
       debug:
