@@ -171,11 +171,10 @@
       # Target akhir diubah menjadi nama file unik: /opt/.../hardening-{{ inventory_hostname }}-report.txt
       raw: >
         sshpass -p "{{ ansible_password }}" 
-        scp -o StrictHostKeyChecking=no -P {{ ansible_port | default(22) }}
-        {{ ansible_user }}@{{ inventory_hostname }}:/opt/linux_hardening_audit2_temp/hardening-{{ inventory_hostname }}-*.txt 
-        /opt/linux_hardening_audit2_temp/hardening-{{ inventory_hostname }}-report.txt
+        scp -o StrictHostKeyChecking=no -P {{ inventory_hostname }} ...
       changed_when: true
       ignore_unreachable: true
+
 
 
 
