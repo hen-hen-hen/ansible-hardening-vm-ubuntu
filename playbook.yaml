@@ -148,24 +148,22 @@
 #########################################################################
 
     - name: Read report content from target (raw with retry)
-      # Menggunakan wildcard (*) agar tidak terpengaruh perubahan variabel jam/menit pada nama file
       raw: "cat /opt/linux_hardening_audit2_temp/hardening-{{ inventory_hostname }}-*.txt"
       register: report_raw_content
-      # Ulangi otomatis jika SSH memutus koneksi (rc != 0 atau ada kata 'closed' di stderr)
-      until: >
-        report_raw_content.rc is defined and 
-        report_raw_content.rc == 0 and 
-        'closed' not in (report_raw_content.stderr | default(''))
-      retries: 15       # Coba ulang sampai 15 kali jika koneksi gagal
-      delay: 10         # Beri jeda 10 detik di setiap percobaan ulang
+      # Cukup pastikan return code adalah 0 (file ketemu dan berhasil di-cat)
+      until: report_raw_content.rc is defined and report_raw_content.rc == 0
+      retries: 15
+      delay: 10
+      # Buat Ansible mengabaikan gangguan penutupan koneksi SSH di akhir transmisi teks
       ignore_errors: true
       changed_when: false
 
     - name: Stop if report missing or unreadable
       fail:
-        msg: "Hardening report was not generated or target SSH is completely unstable."
-      # Jika setelah dicoba berulang-ulang tetap gagal membaca file
+        msg: "Hardening report was not generated."
+      # Validasi ulang secara aman menggunakan rc (return code)
       when: report_raw_content.rc is not defined or report_raw_content.rc != 0
+
 
 #########################################################################
 # DISPLAY REPORT (RAW)
@@ -174,7 +172,6 @@
     - name: Display report (raw)
       debug:
         var: report_raw_content.stdout_lines
-
 
 #########################################################################
 # PREPARE LOCAL STORAGE (ANSIBLE VM - PYTHON TERSEDIA DI SINI)
@@ -188,23 +185,16 @@
         mode: "0755"
 
 #########################################################################
-# FETCH REPORT TO ANSIBLE LOCAL VM (RAW CAT + LOCAL COPY)
+# SAVE REPORT TO LOCAL ANSIBLE VM (LANGSUNG DARI MEMORI)
 #########################################################################
-
-    # Modul "fetch" butuh Python di remote (via slurp), jadi diganti:
-    # baca isi file lewat raw "cat", lalu simpan hasilnya ke file lokal
-    # dari sisi control node (delegate_to localhost, Python tersedia).
-
-    - name: Read report content from target (raw)
-      raw: "cat {{ report_path }}"
-      register: report_raw_content
-      changed_when: false
 
     - name: Save report to local Ansible VM
       delegate_to: localhost
+      # Menggunakan isi variabel 'report_raw_content' yang sudah sukses didapat di bagian atas
       copy:
         content: "{{ report_raw_content.stdout }}"
         dest: "{{ local_report_path }}"
+
 
 #########################################################################
 # VALIDATE DUPLICATE BEFORE UPLOAD (LOCAL, PYTHON TERSEDIA)
