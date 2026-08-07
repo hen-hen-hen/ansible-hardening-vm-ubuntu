@@ -13,13 +13,14 @@
     #############################################
 
     script_name: linux_hardening_audit2.sh
-    remote_script: /opt/linux_hardening_audit2.sh
+    remote_script_dir: /opt/linux_hardening_audit2_temp
+    remote_script: "{{ remote_script_dir }}/{{ script_name }}"
 
     # inventory_hostname dipakai (bukan ansible_hostname),
     # karena gather_facts dimatikan sehingga ansible_hostname
     # tidak tersedia.
     report_name: "hardening-{{ inventory_hostname }}.txt"
-    report_path: "/opt/{{ report_name }}"
+    report_path: "{{ remote_script_dir }}/{{ report_name }}"
 
     #############################################
     # Penyimpanan Lokal di VM Ansible
@@ -75,6 +76,14 @@
           - "IP        : {{ raw_ip.stdout | trim }}"
           - "OS        : {{ raw_os.stdout_lines | default([]) }}"
           - "========================================"
+
+#########################################################################
+# CREATE WORKING DIRECTORY
+#########################################################################
+
+    - name: Create working directory
+      raw: "mkdir -p {{ remote_script_dir }}"
+      changed_when: false
 
 #########################################################################
 # ENSURE SCRIPT EXISTS ON TARGET (RAW, TRANSFER HANYA JIKA BELUM ADA)
@@ -261,12 +270,8 @@
 # CLEANUP REMOTE (RAW)
 #########################################################################
 
-    - name: Remove report from target (raw)
-      raw: "rm -f {{ report_path }}"
-      changed_when: true
-
-    - name: Remove script from target (raw)
-      raw: "rm -f {{ remote_script }}"
+    - name: Remove working directory from target (raw)
+      raw: "rm -rf {{ remote_script_dir }}"
       changed_when: true
 
 #########################################################################
@@ -291,3 +296,4 @@
           - "MINIO ALIAS  : {{ minio_alias }}"
           - "UPLOAD       : {{ 'SKIPPED (DUPLICATE)' if is_duplicate else 'SUCCESS' }}"
           - "========================================"
+
