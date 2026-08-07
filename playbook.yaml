@@ -4,7 +4,6 @@
   become: true
   gather_facts: false
 
-
   vars:
 
     #############################################
@@ -43,7 +42,6 @@
 
     minio_alias: "minio-server-hardening-linux"
 
-
     mc_binary_path: "/usr/local/bin/mc"
 
     mc_download_url: "https://dl.min.io/client/mc/release/linux-amd64/mc"
@@ -58,16 +56,18 @@
     minio_secret_key: "{{ vault_minio_secret_key }}"
 
 
-
   pre_tasks:
 
+
+    #############################################
+    # IDENTIFIER
+    #############################################
 
     - name: Identifier
       raw: |
         echo "Linux Hardening Audit RAW Mode Started"
 
       changed_when: false
-
 
 
     - name: Get hostname
@@ -79,7 +79,6 @@
       changed_when: false
 
 
-
     - name: Get IP Address
       raw: |
         hostname -I | awk '{print $1}'
@@ -87,7 +86,6 @@
       register: raw_ip
 
       changed_when: false
-
 
 
     - name: Get OS Information
@@ -101,7 +99,6 @@
       changed_when: false
 
 
-
     - name: Get Timestamp
       raw: |
         date '+%F %T'
@@ -111,13 +108,9 @@
       changed_when: false
 
 
-
     - name: Display Host Information
-
       debug:
-
         msg:
-
           - "================================"
           - "Inventory : {{ inventory_hostname }}"
           - "Hostname  : {{ raw_hostname.stdout | trim }}"
@@ -127,10 +120,7 @@
           - "================================"
 
 
-
-
   tasks:
-
 
     - name: Linux Hardening Audit Main Block
 
@@ -142,13 +132,8 @@
         #########################################
 
         - name: Create working directory
-
           raw: |
-
             mkdir -p {{ remote_script_dir }}
-
-
-
 
 
         #########################################
@@ -156,75 +141,38 @@
         #########################################
 
         - name: Check script existing
-
           raw: |
-
-            test -f {{ remote_script }}
-
-            && echo EXISTS
-
-            || echo MISSING
-
+            test -f {{ remote_script }} && echo EXISTS || echo MISSING
 
           register: script_check
 
           changed_when: false
 
 
-
-
         - name: Transfer script to target
-
           raw: |
-
-            echo '{{ lookup("file", "files/" + script_name) | b64encode }}' |
-
-            base64 -d > {{ remote_script }}
-
+            echo '{{ lookup("file", "files/" + script_name) | b64encode }}' | base64 -d > {{ remote_script }}
             chmod 0755 {{ remote_script }}
 
-
           when:
-
             - "'MISSING' in script_check.stdout"
 
 
-
-
         - name: Verify script
-
           raw: |
-
-            test -f {{ remote_script }}
-
-            && echo EXISTS
-
-            || echo FAILED
-
+            test -f {{ remote_script }} && echo EXISTS || echo FAILED
 
           register: script_verify
 
           changed_when: false
 
 
-
-
         - name: Stop if script missing
-
           fail:
-
-            msg: >
-
-              Script tidak ditemukan:
-
-              {{ remote_script }}
-
+            msg: "Script tidak ditemukan: {{ remote_script }}"
 
           when:
-
             - "'FAILED' in script_verify.stdout"
-
-
 
 
         #########################################
@@ -232,62 +180,40 @@
         #########################################
 
         - name: Execute hardening script
-
           raw: |
-
             cd {{ remote_script_dir }}
-
             {{ remote_script }}
-
 
           register: hardening_result
 
 
-
         - name: Show execution output
-
           debug:
-
             var: hardening_result.stdout_lines
-
 
         #########################################
         # DETECT TXT REPORT
         #########################################
 
         - name: Detect generated TXT report
-
           raw: |
-
             find /opt \
             -type f \
             -name "*.txt" \
             -mmin -10 \
             | tail -1
 
-
           register: detected_report
-
 
           changed_when: false
 
 
-
-
-
         - name: Validate TXT report exists
-
           fail:
-
             msg: "Report TXT tidak ditemukan setelah script selesai"
 
-
           when:
-
             - detected_report.stdout | trim == ""
-
-
-
 
 
         #########################################
@@ -295,49 +221,25 @@
         #########################################
 
         - name: Rename report
-
           raw: |
-
-            mv "{{ detected_report.stdout | trim }}" \
-            "{{ report_path }}"
-
-
-
+            mv "{{ detected_report.stdout | trim }}" "{{ report_path }}"
 
 
         - name: Verify renamed report
-
           raw: |
-
-            test -f {{ report_path }}
-
-            && echo EXISTS
-
-            || echo FAILED
-
+            test -f {{ report_path }} && echo EXISTS || echo FAILED
 
           register: report_verify
-
 
           changed_when: false
 
 
-
-
-
         - name: Fail if rename report failed
-
           fail:
-
             msg: "Rename report gagal"
 
-
           when:
-
             - "'FAILED' in report_verify.stdout"
-
-
-
 
 
         #########################################
@@ -345,19 +247,12 @@
         #########################################
 
         - name: Read report content
-
           raw: |
-
             cat {{ report_path }}
-
 
           register: report_content
 
-
           changed_when: false
-
-
-
 
 
         #########################################
@@ -365,15 +260,8 @@
         #########################################
 
         - name: Display Hardening Report
-
           debug:
-
-            msg:
-
-              "{{ report_content.stdout_lines }}"
-
-
-
+            msg: "{{ report_content.stdout_lines }}"
 
 
         #########################################
@@ -381,57 +269,32 @@
         #########################################
 
         - name: Copy report to VM Ansible storage
-
           raw: |
-
             scp \
             -o StrictHostKeyChecking=no \
             {{ report_path }} \
             {{ storage_host }}:{{ local_report_path }}
 
-
           register: copy_result
 
 
-
-
-
         - name: Verify report copied to storage
-
           delegate_to: "{{ storage_host }}"
 
-
           raw: |
-
-            test -f {{ local_report_path }}
-
-            && echo EXISTS
-
-            || echo FAILED
-
+            test -f {{ local_report_path }} && echo EXISTS || echo FAILED
 
           register: storage_report_check
-
 
           changed_when: false
 
 
-
-
-
         - name: Fail copy report
-
           fail:
-
             msg: "Copy report ke {{ storage_host }} gagal"
 
-
           when:
-
             - "'FAILED' in storage_report_check.stdout"
-
-
-
 
 
         #########################################
@@ -439,31 +302,19 @@
         #########################################
 
         - name: Upload report to MinIO
-
           delegate_to: "{{ storage_host }}"
 
-
           raw: |
-
             {{ mc_binary_path }} cp \
             {{ local_report_path }} \
             {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}
 
-
           register: minio_upload
 
 
-
-
-
         - name: Show MinIO upload result
-
           debug:
-
             var: minio_upload.stdout_lines
-
-
-
 
 
         #########################################
@@ -471,42 +322,23 @@
         #########################################
 
         - name: Verify uploaded object
-
           delegate_to: "{{ storage_host }}"
 
-
           raw: |
-
             {{ mc_binary_path }} stat \
             {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}
 
-
           register: minio_verify
-
 
           changed_when: false
 
 
-
-
-
         - name: Fail if MinIO verification failed
-
           fail:
-
-            msg: >
-
-              File tidak ditemukan di MinIO:
-
-              {{ report_name }}
-
+            msg: "File tidak ditemukan di MinIO: {{ report_name }}"
 
           when:
-
             - minio_verify.rc != 0
-
-
-
 
 
         #########################################
@@ -514,11 +346,8 @@
         #########################################
 
         - name: Job Summary
-
           debug:
-
             msg:
-
               - "================================="
               - "STATUS       : SUCCESS"
               - "HOST         : {{ inventory_hostname }}"
@@ -529,30 +358,20 @@
               - "================================="
 
 
-
-
-
       #########################################
       # RESCUE
       #########################################
 
       rescue:
 
-
         - name: Show Error
-
           debug:
-
             msg:
-
               - "================================="
               - "STATUS : FAILED"
               - "HOST   : {{ inventory_hostname }}"
               - "TASK   : Linux Hardening Audit"
               - "================================="
-
-
-
 
 
       #########################################
@@ -567,30 +386,20 @@
         #######################################
 
         - name: Cleanup target working directory
-
           raw: |
-
             rm -rf {{ remote_script_dir }}
-
 
           changed_when: true
 
 
-
-
-
         #######################################
-        # CLEAN STORAGE TEMP FILE
+        # CLEAN STORAGE TEMP REPORT
         #######################################
 
         - name: Cleanup storage temporary report
-
           delegate_to: "{{ storage_host }}"
 
-
           raw: |
-
             rm -f {{ local_report_path }}
 
-
-          changed_when: false
+          changed_when: false            
