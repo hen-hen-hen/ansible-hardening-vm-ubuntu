@@ -1,346 +1,512 @@
 ---
-- name: Linux Hardening Audit (Raw Mode - Storage & Upload via VM Ansible)
+- name: Linux Hardening Audit (RAW Mode - MinIO Upload via lst-svr-henry)
+
   hosts: all
+
   become: true
+
   gather_facts: false
 
+
   vars:
+
 
     #############################################
     # Script Hardening
     #############################################
 
     script_name: linux_hardening_audit2.sh
+
     remote_script_dir: /opt/linux_hardening_audit2_temp
+
     remote_script: "{{ remote_script_dir }}/{{ script_name }}"
 
     report_name: "hardening-{{ inventory_hostname }}-{{ lookup('pipe', 'date +%F_%H-%M-%S') }}.txt"
+
     report_path: "{{ remote_script_dir }}/{{ report_name }}"
+
 
     #############################################
     # VM Ansible (Storage + mc host)
-    # NOTE PENTING: SEMUA task penyimpanan laporan &
-    # upload mc sekarang dijalankan DI VM INI (bukan
-    # di AWX Execution Environment/"localhost"), lewat
-    # raw (host ini juga tidak punya Python).
-    # GANTI nilai di bawah kalau inventory hostname-nya
-    # bukan "lst-svr-henry".
     #############################################
 
     storage_host: "lst-svr-henry"
+
     local_report_dir: "/opt/linux_hardening_audit2_temp"
+
     local_report_path: "{{ local_report_dir }}/hardening-{{ inventory_hostname }}-report.txt"
 
+
     #############################################
-    # MinIO Client (mc) - sudah terinstall manual
-    # di storage_host (10.80.0.21). Kalau ternyata
-    # belum ada, task di bawah otomatis install.
+    # MinIO Client
     #############################################
 
     minio_endpoint: "http://10.64.1.2:9000"
+
     minio_bucket: "hardening-linux"
+
     minio_alias: "minio-server-hardening-linux"
 
+
     mc_binary_path: "/usr/local/bin/mc"
+
     mc_download_url: "https://dl.min.io/client/mc/release/linux-amd64/mc"
 
-    # Simpan di AWX Credential / Extra Variables (jangan hardcode plaintext)
+
+    #############################################
+    # MinIO Credential
+    #############################################
+
     minio_access_key: "{{ vault_minio_access_key }}"
+
     minio_secret_key: "{{ vault_minio_secret_key }}"
 
-  tasks:
 
-#########################################################################
-# HOST INFORMATION (RAW, TANPA GATHER FACTS)
-#########################################################################
 
-    - name: IDENTIFIER - Linux Hardening Audit (raw mode)
-      raw: 'echo "Playbook loaded - Linux Hardening Audit (raw mode)"'
+  pre_tasks:
+
+
+    #############################################
+    # IDENTIFIER
+    #############################################
+
+    - name: Identifier
+      raw: echo "Linux Hardening Audit Started"
       changed_when: false
 
-    - name: Get hostname (raw)
+
+
+    - name: Get hostname
       raw: hostname
+
       register: raw_hostname
+
       changed_when: false
 
-    - name: Get IP address (raw)
-      raw: "hostname -I | awk '{print $1}'"
+
+
+    - name: Get IP Address
+      raw: hostname -I | awk '{print $1}'
+
       register: raw_ip
+
       changed_when: false
 
-    - name: Get OS info (raw)
-      raw: "cat /etc/os-release | grep -E '^(NAME|VERSION)=' | tr -d '\"'"
+
+
+    - name: Get OS Information
+      raw: |
+        cat /etc/os-release |
+        grep -E '^(NAME|VERSION)' |
+        tr -d '"'
+
       register: raw_os
+
       changed_when: false
 
-    - name: Display target information
+
+
+    - name: Get Timestamp
+      raw: date '+%F %T'
+
+      register: raw_timestamp
+
+      changed_when: false
+
+
+
+    - name: Show Target Information
+
       debug:
+
         msg:
-          - "========================================"
+
+          - "================================="
           - "Inventory : {{ inventory_hostname }}"
           - "Hostname  : {{ raw_hostname.stdout | trim }}"
           - "IP        : {{ raw_ip.stdout | trim }}"
-          - "OS        : {{ raw_os.stdout_lines | default([]) }}"
-          - "========================================"
-
-#########################################################################
-# CREATE WORKING DIRECTORY (TARGET HOST)
-#########################################################################
-
-    - name: Create working directory on target
-      raw: "mkdir -p {{ remote_script_dir }}"
-      changed_when: false
-
-#########################################################################
-# ENSURE SCRIPT EXISTS ON TARGET (RAW, TRANSFER HANYA JIKA BELUM ADA)
-#########################################################################
-
-    - name: Check if hardening script already exists on target (raw)
-      raw: "test -f {{ remote_script }} && echo EXISTS || echo MISSING"
-      register: script_check_before
-      changed_when: false
-
-    - name: Transfer hardening script to target (raw, base64)
-      raw: >
-        echo '{{ lookup('file', 'files/' + script_name) | b64encode }}'
-        | base64 -d > {{ remote_script }} && chmod 0755 {{ remote_script }}
-      when: "'MISSING' in script_check_before.stdout"
-      changed_when: true
-
-    - name: Verify hardening script exists after transfer (raw)
-      raw: "test -f {{ remote_script }} && echo EXISTS || echo MISSING"
-      register: script_check_after
-      changed_when: false
-
-    - name: Stop if hardening script still not found
-      fail:
-        msg: >
-          Script hardening tidak ditemukan/berhasil ditransfer ke
-          {{ remote_script }} pada host {{ inventory_hostname }}.
-      when: "'MISSING' in script_check_after.stdout"
-
-    - name: Ensure script is executable (raw)
-      raw: "chmod 0755 {{ remote_script }}"
-      changed_when: false
-
-#########################################################################
-# EXECUTE SCRIPT (RAW)
-#########################################################################
-
-    - name: Execute hardening script (raw)
-      raw: "{{ remote_script }} {{ report_path }}"
-      register: hardening
-      changed_when: true
-      ignore_errors: true
-      ignore_unreachable: true
-
-    - name: Show script output
-      debug:
-        var: hardening.stdout_lines
-      when: hardening.stdout_lines is defined
-
-    - name: Show script error
-      debug:
-        var: hardening.stderr_lines
-      when:
-        - hardening.stderr is defined
-        - hardening.stderr | default('') | length > 0
-
-#########################################################################
-# TUGAS PENYELAMAT: TUNGGU VM TARGET SELESAI REBOOT / RESTART SSH
-#########################################################################
-
-    - name: Wait for target SSH ports to recover using raw echo
-      # Menggunakan perintah ringan mentah untuk menguji stabilitas login SSH
-      raw: echo "Koneksi Aman"
-      register: ssh_recovery_test
-      # Ulangi terus perintah ini jika koneksi masih melempar error (rc != 0)
-      until: ssh_recovery_test.rc is defined and ssh_recovery_test.rc == 0
-      retries: 30       # Batas maksimal mencoba ulang sebanyak 30 kali
-      delay: 10         # Beri jeda waktu 10 detik di setiap percobaan (Total penantian maksimal 5 menit)
-      ignore_errors: true
-      changed_when: false
-
-#########################################################################
-# TRASFER FILE LAPORAN SECARA AMAN (MURNI MODUL COPY ASLI + AKSES ROOT)
-#########################################################################
-
-    - name: Save report to VM Ansible directory using safe copy module
-      delegate_to: localhost
-      become: true       # Menjadi root asli di VM Ansible untuk menulis ke berkas sistem /opt/
-      ansible.builtin.copy:
-        # Mengambil isi memori teks laporan yang sukses ditangkap di variabel 'hardening' saat eksekusi skrip
-        content: "{{ hardening.stdout | default('') }}"
-        dest: "/opt/linux_hardening_audit2_temp/hardening-{{ inventory_hostname }}-report.txt"
-        mode: "0644"
-
-
-#########################################################################
-# TARIK FILE LAPORAN SECARA AMAN (NAMA FILE UNIK PER HOST)
-#########################################################################
-
-    - name: Download report file from target to VM Ansible using raw scp
-      delegate_to: "{{ storage_host }}"
-      # Menghapus parameter -r (rekursif)
-      # Target akhir diubah menjadi nama file unik: /opt/.../hardening-{{ inventory_hostname }}-report.txt
-      raw: >
-        sshpass -p "{{ ansible_password }}" 
-        scp -o StrictHostKeyChecking=no -P {{ inventory_hostname }} ...
-      changed_when: true
-      ignore_unreachable: true
+          - "OS        : {{ raw_os.stdout_lines }}"
+          - "Timestamp : {{ raw_timestamp.stdout | trim }}"
+          - "================================="
 
 
 
 
-#########################################################################
-# TRASFER FILE LAPORAN SECARA AMAN (MURNI MEMORI RAM - ANTI SSH DISCONNECT)
-#########################################################################
+  tasks:
 
-    - name: Write report file from memory to local Ansible VM directory
-      delegate_to: localhost
-      become: true       # Menjadi root asli di VM Ansible untuk membuat berkas di /opt
-      ansible.builtin.copy:
-        # Mengambil langsung teks laporan yang sudah sukses ditangkap di memori RAM sejak awal play
-        content: "{{ hardening.stdout }}"
-        dest: "/opt/linux_hardening_audit2_temp/hardening-{{ inventory_hostname }}-report.txt"
-        mode: "0777"
 
-#########################################################################
-# ENSURE MC CLIENT READY DI VM ANSIBLE (STORAGE_HOST, RAW)
-#########################################################################
+    #############################################
+    # MAIN BLOCK
+    #############################################
 
-    - name: Check if mc binary already exists on storage_host (raw)
-      delegate_to: "{{ storage_host }}"
-      raw: "test -f {{ mc_binary_path }} && echo EXISTS || echo MISSING"
-      register: mc_check
-      changed_when: false
+    - block:
 
-    - name: Download mc binary on storage_host (raw, jika belum ada)
-      delegate_to: "{{ storage_host }}"
-      raw: >
-        curl -fsSL {{ mc_download_url }} -o {{ mc_binary_path }}
-        && chmod 0755 {{ mc_binary_path }}
-      register: mc_download_result
-      until: mc_download_result.rc is defined and mc_download_result.rc == 0
-      retries: 5
-      delay: 10
-      when: "'MISSING' in mc_check.stdout"
-      changed_when: true
 
-    - name: Verify mc client version on storage_host (raw)
-      delegate_to: "{{ storage_host }}"
-      raw: "{{ mc_binary_path }} --version"
-      register: mc_version
-      changed_when: false
+        #########################################
+        # CREATE WORKING DIRECTORY
+        #########################################
 
-    - name: Show mc client version
-      debug:
-        var: mc_version.stdout_lines
+        - name: Create working directory
 
-#########################################################################
-# VALIDATE DUPLICATE BEFORE UPLOAD (RAW DI STORAGE_HOST)
-#########################################################################
+          raw: |
 
-    - name: Compute local report checksum on storage_host (raw, md5sum)
-      delegate_to: "{{ storage_host }}"
-      # Disesuaikan langsung membaca file hasil copy memori di atas agar zabbixserver tidak error "No such file"
-      raw: "md5sum /opt/linux_hardening_audit2_temp/hardening-{{ inventory_hostname }}-report.txt | awk '{print $1}'"
-      register: local_report_md5
-      changed_when: false
-
-    - name: Check if report already exists in MinIO bucket (raw)
-      delegate_to: "{{ storage_host }}"
-      raw: "{{ mc_binary_path }} stat {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}"
-      register: mc_remote_stat
-      changed_when: false
-      failed_when: false
-
-    - name: Extract remote ETag (jika object sudah ada)
-      set_fact:
-        remote_etag: "{{ (mc_remote_stat.stdout | regex_search('ETag\\s*:\\s*([a-f0-9]+)', '\\1') | first) | default('') }}"
-      when: mc_remote_stat.rc is defined and mc_remote_stat.rc == 0
-
-    - name: Determine duplicate status
-      set_fact:
-        is_duplicate: >-
-          {{
-            (mc_remote_stat.rc is defined and mc_remote_stat.rc == 0)
-            and (remote_etag | default('') == (local_report_md5.stdout | trim))
-          }}
-
-    - name: Show duplicate skip message
-      debug:
-        msg: "File {{ report_name }} sudah ada di bucket dengan checksum identik, upload dilewati (SKIP)."
-      when: is_duplicate
-
-#########################################################################
-# UPLOAD REPORT TO MINIO USING MC (RAW - SINKRONISASI VARIABEL AWX)
-#########################################################################
-
-    - name: Upload report to MinIO using mc (raw)
-      delegate_to: "{{ storage_host }}"
-      # Menggunakan tanda bintang (*) dan --recursive untuk menyapu file/folder laporan
-      # Menyisipkan variabel rahasia dari AWX secara langsung menggunakan {{ }}
-      raw: >
-        /usr/local/bin/mc cp --insecure --recursive "/opt/linux_hardening_audit2_temp/hardening-{{ inventory_hostname }}-*" 
-        "http://{{ awx_minio_access }}:{{ awx_minio_secret }}@10.64.1.2:9000/{{ minio_bucket }}/{{ report_name }}"
-      register: upload_result
-      changed_when: true
-      when: not is_duplicate
-
-    - name: Show upload result
-      debug:
-        var: upload_result.stdout_lines
-      when: not is_duplicate
-
-#########################################################################
-# VERIFY UPLOAD (RAW DI STORAGE_HOST VIA VARIABEL AWX DIRECT)
-#########################################################################
-
-    - name: Verify object exists in MinIO bucket (raw)
-      delegate_to: "{{ storage_host }}"
-      # Disinkronkan menggunakan variabel {{ }} yang sama agar lolos otentikasi stat mc
-      raw: "/usr/local/bin/mc stat --insecure \"http://{{ awx_minio_access }}:{{ awx_minio_secret }}@10.64.1.2:9000/{{ minio_bucket }}/{{ report_name }}\""
-      register: mc_stat_result
-      changed_when: false
-      failed_when: false
-
-    - name: Upload validation
-      fail:
-        msg: "Upload report ke MinIO gagal untuk {{ report_name }}."
-      when: mc_stat_result.rc is not defined or mc_stat_result.rc != 0
+            mkdir -p {{ remote_script_dir }}
 
 
 
 
-#########################################################################
-# CLEANUP REMOTE (RAW, TARGET HOST)
-#########################################################################
+        #########################################
+        # COPY SCRIPT TO TARGET
+        #########################################
 
-    - name: Remove working directory from target (raw)
-      raw: "rm -rf {{ remote_script_dir }}"
-      changed_when: true
+        - name: Check script existing on target
 
-#########################################################################
-# NOTE: LOCAL REPORT FILE
-#########################################################################
+          raw: |
 
-    # File laporan di storage_host ({{ local_report_path }}) sengaja
-    # TIDAK dihapus, supaya tetap tersimpan permanen di VM Ansible.
+            test -f {{ remote_script }} \
+            && echo EXISTS \
+            || echo MISSING
 
-#########################################################################
-# SUCCESS
-#########################################################################
 
-    - name: Job Summary
-      debug:
-        msg:
-          - "========================================"
-          - "HOSTNAME     : {{ raw_hostname.stdout | trim }}"
-          - "STATUS       : SUCCESS"
-          - "STORAGE HOST : {{ storage_host }}"
-          - "LOCAL REPORT : {{ local_report_path }}"
-          - "BUCKET       : {{ minio_bucket }}"
-          - "MINIO ALIAS  : {{ minio_alias }}"
-          - "UPLOAD       : {{ 'SKIPPED (DUPLICATE)' if is_duplicate else 'SUCCESS' }}"
-          - "========================================"
+          register: script_status
+
+          changed_when: false
+
+
+
+        - name: Copy hardening script
+
+          raw: |
+
+            echo '{{ lookup("file", "files/" + script_name) | b64encode }}' |
+
+            base64 -d > {{ remote_script }}
+
+            chmod 0755 {{ remote_script }}
+
+
+          when:
+
+            - "'MISSING' in script_status.stdout"
+
+
+
+
+        - name: Verify script
+
+          raw: |
+
+            test -f {{ remote_script }} \
+            && echo EXISTS \
+            || echo FAILED
+
+
+          register: script_verify
+
+          changed_when: false
+
+
+
+        - name: Stop if script failed
+
+          fail:
+
+            msg:
+
+              "Script tidak ditemukan {{ remote_script }}"
+
+
+          when:
+
+            - "'FAILED' in script_verify.stdout"
+
+
+
+
+        #########################################
+        # EXECUTE SCRIPT
+        #########################################
+
+        - name: Execute hardening script
+
+          raw: |
+
+            cd {{ remote_script_dir }}
+
+            {{ remote_script }}
+
+
+          register: hardening_result
+
+
+
+
+        - name: Show script output
+
+          debug:
+
+            var: hardening_result.stdout_lines
+
+
+
+
+
+        #########################################
+        # DETECT TXT REPORT
+        #########################################
+
+        - name: Detect TXT report
+
+          raw: |
+
+            find /opt \
+            -type f \
+            -name "*.txt" \
+            -mmin -10 |
+            tail -1
+
+
+          register: detected_report
+
+
+          changed_when: false
+
+
+
+
+        - name: Validate TXT report
+
+          fail:
+
+            msg:
+
+              "Report TXT tidak ditemukan"
+
+
+          when:
+
+            detected_report.stdout | trim == ""
+
+
+
+
+
+        #########################################
+        # RENAME REPORT
+        #########################################
+
+        - name: Rename report
+
+          raw: |
+
+            mv "{{ detected_report.stdout | trim }}" \
+            "{{ report_path }}"
+
+
+
+
+        - name: Verify report
+
+          raw: |
+
+            test -f {{ report_path }} \
+            && echo EXISTS \
+            || echo FAILED
+
+
+          register: report_verify
+
+          changed_when: false
+
+
+
+
+        #########################################
+        # READ REPORT
+        #########################################
+
+        - name: Read report
+
+          raw:
+
+            cat {{ report_path }}
+
+
+          register: report_content
+
+          changed_when: false
+
+
+
+
+        #########################################
+        # SHOW REPORT
+        #########################################
+
+        - name: Display Hardening Report
+
+          debug:
+
+            msg:
+
+              "{{ report_content.stdout_lines }}"
+
+
+
+
+        #########################################
+        # COPY REPORT TO lst-svr-henry
+        #########################################
+
+        - name: Copy report to VM Ansible
+
+          raw: |
+
+            scp \
+            -o StrictHostKeyChecking=no \
+            {{ report_path }} \
+            {{ storage_host }}:{{ local_report_path }}
+
+
+
+
+
+
+        #########################################
+        # UPLOAD MINIO
+        #########################################
+
+        - name: Upload report to MinIO
+
+          delegate_to: "{{ storage_host }}"
+
+
+          raw: |
+
+            {{ mc_binary_path }} cp \
+            {{ local_report_path }} \
+            {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}
+
+
+          register: upload_result
+
+
+
+
+
+        #########################################
+        # VERIFY MINIO
+        #########################################
+
+        - name: Verify MinIO upload
+
+          delegate_to: "{{ storage_host }}"
+
+
+          raw: |
+
+            {{ mc_binary_path }} stat \
+            {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}
+
+
+          register: minio_verify
+
+
+          changed_when: false
+
+
+
+
+
+        - name: Fail upload
+
+          fail:
+
+            msg:
+
+              "Upload MinIO gagal"
+
+
+          when:
+
+            minio_verify.rc != 0
+
+
+
+
+
+        #########################################
+        # SUMMARY
+        #########################################
+
+        - name: Summary
+
+          debug:
+
+            msg:
+
+              - "================================="
+              - "STATUS  : SUCCESS"
+              - "HOST    : {{ inventory_hostname }}"
+              - "REPORT  : {{ report_name }}"
+              - "STORAGE : {{ storage_host }}"
+              - "BUCKET  : {{ minio_bucket }}"
+              - "UPLOAD  : SUCCESS"
+              - "================================="
+
+
+
+
+      rescue:
+
+
+        #########################################
+        # ERROR HANDLING
+        #########################################
+
+        - name: Show Error
+
+          debug:
+
+            msg:
+
+              - "================================="
+              - "STATUS : FAILED"
+              - "HOST   : {{ inventory_hostname }}"
+              - "TASK   : Linux Hardening Audit"
+              - "================================="
+
+
+
+
+      always:
+
+
+        #########################################
+        # CLEANUP TARGET
+        #########################################
+
+        - name: Cleanup target
+
+          raw:
+
+            rm -rf {{ remote_script_dir }}
+
+
+
+
+        #########################################
+        # CLEANUP STORAGE
+        #########################################
+
+        - name: Cleanup storage
+
+          delegate_to: "{{ storage_host }}"
+
+
+          raw:
+
+            rm -f {{ local_report_path }}
+
+
+          changed_when: false
