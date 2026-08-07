@@ -273,9 +273,14 @@
         msg: "File {{ report_name }} sudah ada di bucket dengan checksum identik, upload dilewati (SKIP)."
       when: is_duplicate
 
+#########################################################################
+# UPLOAD REPORT TO MINIO USING MC (RAW - SINKRONISASI VARIABEL AWX)
+#########################################################################
+
     - name: Upload report to MinIO using mc (raw)
       delegate_to: "{{ storage_host }}"
-      # Kita gunakan {{ awx_minio_access }} secara polos tanpa menulis password aslinya di sini
+      # Menggunakan tanda bintang (*) dan --recursive untuk menyapu file/folder laporan
+      # Menyisipkan variabel rahasia dari AWX secara langsung menggunakan {{ }}
       raw: >
         /usr/local/bin/mc cp --insecure --recursive "/opt/linux_hardening_audit2_temp/hardening-{{ inventory_hostname }}-*" 
         "http://{{ awx_minio_access }}:{{ awx_minio_secret }}@10.64.1.2:9000/{{ minio_bucket }}/{{ report_name }}"
@@ -283,12 +288,28 @@
       changed_when: true
       when: not is_duplicate
 
+    - name: Show upload result
+      debug:
+        var: upload_result.stdout_lines
+      when: not is_duplicate
+
+#########################################################################
+# VERIFY UPLOAD (RAW DI STORAGE_HOST VIA VARIABEL AWX DIRECT)
+#########################################################################
+
     - name: Verify object exists in MinIO bucket (raw)
       delegate_to: "{{ storage_host }}"
-      raw: "/usr/local/bin/mc stat --insecure http://{{ awx_minio_access }}:{{ awx_minio_secret }}@10.64.1.2:9000/{{ minio_bucket }}/{{ report_name }}"
+      # Disinkronkan menggunakan variabel {{ }} yang sama agar lolos otentikasi stat mc
+      raw: "/usr/local/bin/mc stat --insecure \"http://{{ awx_minio_access }}:{{ awx_minio_secret }}@10.64.1.2:9000/{{ minio_bucket }}/{{ report_name }}\""
       register: mc_stat_result
       changed_when: false
       failed_when: false
+
+    - name: Upload validation
+      fail:
+        msg: "Upload report ke MinIO gagal untuk {{ report_name }}."
+      when: mc_stat_result.rc is not defined or mc_stat_result.rc != 0
+
 
 
 
