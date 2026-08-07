@@ -144,18 +144,14 @@
         - hardening.stderr | default('') | length > 0
 
 #########################################################################
-# TUGAS PENYELAMAT: TUNGGU SSH KEMBALI ONLINE
+# TUGAS PENYELAMAT: TUNGGU VM BENAR-BENAR SIAP MENERIMA KONEKSI SSH
 #########################################################################
 
-    - name: Wait for SSH connection to recover after script execution
-      delegate_to: localhost
-      # Menggunakan ansible.builtin.wait_for untuk memeriksa port SSH (22) di target
-      ansible.builtin.wait_for:
-        host: "{{ inventory_hostname }}"
-        port: 22
-        delay: 5          # Beri jeda 5 detik sebelum mulai mengecek
-        timeout: 120      # Batas waktu maksimal menunggu (2 menit)
-        state: started
+    - name: Wait for target VMs to be fully reachable via SSH
+      # Modul ini secara otomatis menguji koneksi login SSH sesungguhnya
+      ansible.builtin.wait_for_connection:
+        delay: 15          # Beri jeda 15 detik sebelum percobaan pertama (menunggu reboot/restart selesai)
+        timeout: 300       # Perpanjang waktu tunggu jadi 5 menit (mengantisipasi zabbixserver yang lambat boot)
 
 #########################################################################
 # VERIFY REPORT (REMOTE, RAW)
