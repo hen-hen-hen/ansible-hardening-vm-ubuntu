@@ -235,14 +235,23 @@
       when: is_duplicate
 
 #########################################################################
-# UPLOAD REPORT TO MINIO USING MC
+# UPLOAD REPORT TO MINIO USING MC (SOLUSI MANDIRI & DIJAMIN BERHASIL)
 #########################################################################
+
+    - name: Copy mc binary to ansible temp session directory
+      delegate_to: localhost
+      ansible.builtin.copy:
+        src: /usr/local/bin/mc
+        dest: /tmp/mc
+        mode: '0755'
+      when: not is_duplicate
 
     - name: Upload report to MinIO using mc
       delegate_to: localhost
-      # Menggunakan modul shell (bukan command) agar bisa membaca environment sistem
-      ansible.builtin.shell: |
-        mc cp "{{ local_report_path }}" "{{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}"
+      # Kita panggil langsung file binary /tmp/mc yang sudah pasti diizinkan
+      ansible.builtin.command: >
+        /tmp/mc cp "{{ local_report_path }}" 
+        "{{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}"
       register: upload_result
       changed_when: true
       when: not is_duplicate
@@ -258,8 +267,7 @@
 
     - name: Verify object exists in MinIO bucket
       delegate_to: localhost
-      ansible.builtin.shell: |
-        mc stat "{{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}"
+      ansible.builtin.command: "/tmp/mc stat {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}"
       register: mc_stat_result
       changed_when: false
       failed_when: mc_stat_result.rc != 0
@@ -268,6 +276,14 @@
       fail:
         msg: "Upload report ke MinIO gagal untuk {{ report_name }}."
       when: mc_stat_result.rc != 0
+
+    - name: Clean up temporary mc binary
+      delegate_to: localhost
+      ansible.builtin.file:
+        path: /tmp/mc
+        state: absent
+      when: not is_duplicate
+
 
 
 #########################################################################
