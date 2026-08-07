@@ -1,5 +1,5 @@
 ---
-- name: Linux Hardening Audit (Raw Mode - Tanpa Python di Target)
+- name: Linux Hardening Audit (Raw Mode - Storage & Upload via VM Ansible)
   hosts: all
   become: true
   gather_facts: false
@@ -8,35 +8,33 @@
 
     #############################################
     # Script Hardening
-    # NOTE: jika script sudah ada di host target,
-    # transfer akan di-skip otomatis (idempoten)
     #############################################
 
     script_name: linux_hardening_audit2.sh
     remote_script_dir: /opt/linux_hardening_audit2_temp
     remote_script: "{{ remote_script_dir }}/{{ script_name }}"
 
-    # inventory_hostname dipakai (bukan ansible_hostname),
-    # karena gather_facts dimatikan sehingga ansible_hostname
-    # tidak tersedia.
     report_name: "hardening-{{ inventory_hostname }}-{{ lookup('pipe', 'date +%F_%H-%M-%S') }}.txt"
     report_path: "{{ remote_script_dir }}/{{ report_name }}"
 
     #############################################
-    # Penyimpanan Lokal di VM Ansible
+    # VM Ansible (Storage + mc host)
+    # NOTE PENTING: SEMUA task penyimpanan laporan &
+    # upload mc sekarang dijalankan DI VM INI (bukan
+    # di AWX Execution Environment/"localhost"), lewat
+    # raw (host ini juga tidak punya Python).
+    # GANTI nilai di bawah kalau inventory hostname-nya
+    # bukan "lst-svr-henry".
     #############################################
 
+    storage_host: "lst-svr-henry"
     local_report_dir: "/opt/linux_hardening_audit2_temp"
-    local_report_path: "{{ local_report_dir }}/{{ report_name }}"
+    local_report_path: "{{ local_report_dir }}/hardening-{{ inventory_hostname }}-report.txt"
 
     #############################################
-    # MinIO Client (mc) - Install & Alias OTOMATIS
-    # NOTE PENTING: delegate_to localhost berjalan di
-    # dalam Execution Environment (container) AWX yang
-    # EPHEMERAL - filesystem-nya BEDA dari VM fisik tempat
-    # kamu install mc secara manual sebelumnya. Container
-    # ini fresh setiap job run, jadi mc HARUS di-install
-    # ulang otomatis di sini setiap kali playbook jalan.
+    # MinIO Client (mc) - sudah terinstall manual
+    # di storage_host (10.80.0.21). Kalau ternyata
+    # belum ada, task di bawah otomatis install.
     #############################################
 
     minio_endpoint: "http://10.64.1.2:9000"
@@ -86,10 +84,10 @@
           - "========================================"
 
 #########################################################################
-# CREATE WORKING DIRECTORY
+# CREATE WORKING DIRECTORY (TARGET HOST)
 #########################################################################
 
-    - name: Create working directory
+    - name: Create working directory on target
       raw: "mkdir -p {{ remote_script_dir }}"
       changed_when: false
 
@@ -102,9 +100,6 @@
       register: script_check_before
       changed_when: false
 
-    # Transfer file dilakukan dengan encode isi script lokal (di control
-    # node) jadi base64, lalu di-decode kembali langsung di sisi target
-    # lewat raw command. Ini menggantikan modul "copy" yang butuh Python.
     - name: Transfer hardening script to target (raw, base64)
       raw: >
         echo '{{ lookup('file', 'files/' + script_name) | b64encode }}'
@@ -152,86 +147,73 @@
         - hardening.stderr | default('') | length > 0
 
 #########################################################################
-# READ REPORT (REMOTE, RAW, ANTI-DISCONNECT & WILDCARD)
+# READ REPORT FROM TARGET (RAW, ANTI-DISCONNECT & WILDCARD)
 #########################################################################
 
     - name: Read report content from target (raw with retry)
-      raw: "cat /opt/linux_hardening_audit2_temp/hardening-{{ inventory_hostname }}-*.txt"
+      raw: "cat {{ remote_script_dir }}/hardening-{{ inventory_hostname }}-*.txt"
       register: report_raw_content
-      # Cukup pastikan return code adalah 0 (file ketemu dan berhasil di-cat)
       until: report_raw_content.rc is defined and report_raw_content.rc == 0
       retries: 15
       delay: 10
-      # Buat Ansible mengabaikan gangguan penutupan koneksi SSH di akhir transmisi teks
       ignore_errors: true
       changed_when: false
 
     - name: Stop if report missing or unreadable
       fail:
         msg: "Hardening report was not generated."
-      # Validasi ulang secara aman menggunakan rc (return code)
       when: report_raw_content.rc is not defined or report_raw_content.rc != 0
-
-#########################################################################
-# DISPLAY REPORT (RAW)
-#########################################################################
 
     - name: Display report (raw)
       debug:
         var: report_raw_content.stdout_lines
 
 #########################################################################
-# PREPARE LOCAL STORAGE (DI EXECUTION ENVIRONMENT / VM ANSIBLE)
+# KIRIM ISI LAPORAN KE VM ANSIBLE (STORAGE_HOST) VIA RAW BASE64
 #########################################################################
 
-    - name: Ensure local temp directory exists on Ansible VM
-      delegate_to: localhost
-      become: true       # Memaksa pembuatan folder menggunakan akses root VM Ansible
-      ansible.builtin.file:
-        path: "/opt/linux_hardening_audit2_temp"
-        state: directory
-        mode: "0777"     # Izin luas agar file dari semua user/node bisa ditulis
+    # Content laporan (sudah ditangkap di report_raw_content.stdout dari
+    # host target) di-encode base64 lalu ditulis ke file di storage_host
+    # lewat raw command yang di-delegate. Storage_host TIDAK punya Python,
+    # jadi modul copy/stat/file/shell biasa tidak bisa dipakai di sini.
+
+    - name: Ensure local temp directory exists on VM Ansible (storage_host)
+      delegate_to: "{{ storage_host }}"
+      raw: "mkdir -p {{ local_report_dir }} && chmod 0777 {{ local_report_dir }}"
+      changed_when: false
+
+    - name: Save report to VM Ansible directory (raw, base64)
+      delegate_to: "{{ storage_host }}"
+      raw: >
+        echo '{{ report_raw_content.stdout | b64encode }}'
+        | base64 -d > {{ local_report_path }}
+      changed_when: true
 
 #########################################################################
-# SAVE REPORT TO LOCAL ANSIBLE VM DIRECTORY
+# ENSURE MC CLIENT READY DI VM ANSIBLE (STORAGE_HOST, RAW)
 #########################################################################
 
-    - name: Save report to local Ansible VM directory
-      delegate_to: localhost
-      become: true       # Menggunakan akses root untuk menulis file ke direktori sistem
-      ansible.builtin.copy:
-        content: "{{ report_raw_content.stdout }}"
-        # Disimpan langsung ke folder /opt/linux_hardening_audit2_temp/ di VM Ansible
-        dest: "/opt/linux_hardening_audit2_temp/hardening-{{ inventory_hostname }}-report.txt"
+    - name: Check if mc binary already exists on storage_host (raw)
+      delegate_to: "{{ storage_host }}"
+      raw: "test -f {{ mc_binary_path }} && echo EXISTS || echo MISSING"
+      register: mc_check
+      changed_when: false
 
-#########################################################################
-# INSTALL & CONFIGURE MC CLIENT DI EXECUTION ENVIRONMENT (LOCALHOST)
-#########################################################################
+    - name: Download mc binary on storage_host (raw, jika belum ada)
+      delegate_to: "{{ storage_host }}"
+      raw: >
+        curl -fsSL {{ mc_download_url }} -o {{ mc_binary_path }}
+        && chmod 0755 {{ mc_binary_path }}
+      register: mc_download_result
+      until: mc_download_result.rc is defined and mc_download_result.rc == 0
+      retries: 5
+      delay: 10
+      when: "'MISSING' in mc_check.stdout"
+      changed_when: true
 
-    # Ini WAJIB dijalankan setiap job run karena Execution Environment
-    # AWX bersifat ephemeral (container fresh tiap kali job jalan).
-    # Instalasi mc manual via SSH ke VM fisik TIDAK persist di sini.
-
-    - name: Check if mc binary already exists in Execution Environment
-      delegate_to: localhost
-      become: true
-      ansible.builtin.stat:
-        path: "{{ mc_binary_path }}"
-      register: mc_installed
-
-    - name: Download mc (MinIO Client) binary
-      delegate_to: localhost
-      become: true
-      ansible.builtin.get_url:
-        url: "{{ mc_download_url }}"
-        dest: "{{ mc_binary_path }}"
-        mode: "0755"
-      when: not mc_installed.stat.exists
-
-    - name: Verify mc client version
-      delegate_to: localhost
-      become: true
-      ansible.builtin.command: "{{ mc_binary_path }} --version"
+    - name: Verify mc client version on storage_host (raw)
+      delegate_to: "{{ storage_host }}"
+      raw: "{{ mc_binary_path }} --version"
       register: mc_version
       changed_when: false
 
@@ -239,45 +221,47 @@
       debug:
         var: mc_version.stdout_lines
 
-    - name: Set mc alias for MinIO endpoint
-      delegate_to: localhost
-      become: true
-      ansible.builtin.command: >
+    - name: Set mc alias for MinIO endpoint on storage_host (raw)
+      delegate_to: "{{ storage_host }}"
+      raw: >
         {{ mc_binary_path }} alias set {{ minio_alias }}
         {{ minio_endpoint }} {{ minio_access_key }} {{ minio_secret_key }}
       changed_when: true
       no_log: true
 
 #########################################################################
-# VALIDATE DUPLICATE BEFORE UPLOAD (LOCAL VIA ROOT VM ANSIBLE)
+# VALIDATE DUPLICATE BEFORE UPLOAD (RAW DI STORAGE_HOST)
 #########################################################################
 
-    - name: Compute local report checksum (md5)
-      delegate_to: localhost
-      become: true       # Menggunakan root untuk membaca berkas lokal di /opt/
-      ansible.builtin.stat:
-        path: "/opt/linux_hardening_audit2_temp/hardening-{{ inventory_hostname }}-report.txt"
-        checksum_algorithm: md5
-      register: local_report_stat
+    # Catatan: perbandingan checksum ini akurat untuk file yang diupload
+    # sebagai single-part (mc cp untuk file kecil seperti .txt selalu
+    # single-part), karena ETag = MD5 pada kondisi tersebut.
 
-    - name: Check if report already exists in MinIO bucket
-      delegate_to: localhost
-      become: true       # Menggunakan root agar perintah mc terdeteksi sistem
-      ansible.builtin.shell: "{{ mc_binary_path }} stat {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}"
+    - name: Compute local report checksum on storage_host (raw, md5sum)
+      delegate_to: "{{ storage_host }}"
+      raw: "md5sum {{ local_report_path }} | awk '{print $1}'"
+      register: local_report_md5
+      changed_when: false
+
+    - name: Check if report already exists in MinIO bucket (raw)
+      delegate_to: "{{ storage_host }}"
+      raw: "{{ mc_binary_path }} stat {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}"
       register: mc_remote_stat
       changed_when: false
       failed_when: false
 
     - name: Extract remote ETag (jika object sudah ada)
-      delegate_to: localhost
       set_fact:
         remote_etag: "{{ (mc_remote_stat.stdout | regex_search('ETag\\s*:\\s*([a-f0-9]+)', '\\1') | first) | default('') }}"
-      when: mc_remote_stat.rc == 0
+      when: mc_remote_stat.rc is defined and mc_remote_stat.rc == 0
 
     - name: Determine duplicate status
-      delegate_to: localhost
       set_fact:
-        is_duplicate: "{{ (mc_remote_stat.rc == 0) and (remote_etag | default('') == local_report_stat.stat.checksum) }}"
+        is_duplicate: >-
+          {{
+            (mc_remote_stat.rc is defined and mc_remote_stat.rc == 0)
+            and (remote_etag | default('') == (local_report_md5.stdout | trim))
+          }}
 
     - name: Show duplicate skip message
       debug:
@@ -285,14 +269,14 @@
       when: is_duplicate
 
 #########################################################################
-# UPLOAD REPORT TO MINIO USING MC (EKSEKUSI VIA PATH ABSOLUT ROOT)
+# UPLOAD REPORT TO MINIO (RAW DI STORAGE_HOST)
 #########################################################################
 
-    - name: Upload report to MinIO using mc via root
-      delegate_to: localhost
-      become: true
-      ansible.builtin.shell: |
-        {{ mc_binary_path }} cp "/opt/linux_hardening_audit2_temp/hardening-{{ inventory_hostname }}-report.txt" "{{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}"
+    - name: Upload report to MinIO using mc on storage_host (raw)
+      delegate_to: "{{ storage_host }}"
+      raw: >
+        {{ mc_binary_path }} cp {{ local_report_path }}
+        {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}
       register: upload_result
       changed_when: true
       when: not is_duplicate
@@ -303,24 +287,23 @@
       when: not is_duplicate
 
 #########################################################################
-# VERIFY UPLOAD (MC VIA PATH ABSOLUT ROOT)
+# VERIFY UPLOAD (RAW DI STORAGE_HOST)
 #########################################################################
 
-    - name: Verify object exists in MinIO bucket
-      delegate_to: localhost
-      become: true
-      ansible.builtin.shell: "{{ mc_binary_path }} stat {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}"
+    - name: Verify object exists in MinIO bucket (raw)
+      delegate_to: "{{ storage_host }}"
+      raw: "{{ mc_binary_path }} stat {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}"
       register: mc_stat_result
       changed_when: false
-      failed_when: mc_stat_result.rc != 0
+      failed_when: false
 
     - name: Upload validation
       fail:
         msg: "Upload report ke MinIO gagal untuk {{ report_name }}."
-      when: mc_stat_result.rc != 0
+      when: mc_stat_result.rc is not defined or mc_stat_result.rc != 0
 
 #########################################################################
-# CLEANUP REMOTE (RAW)
+# CLEANUP REMOTE (RAW, TARGET HOST)
 #########################################################################
 
     - name: Remove working directory from target (raw)
@@ -331,8 +314,8 @@
 # NOTE: LOCAL REPORT FILE
 #########################################################################
 
-    # File laporan lokal sengaja TIDAK dihapus, karena sesuai permintaan
-    # laporan harus tetap tersimpan di {{ local_report_dir }} pada VM Ansible.
+    # File laporan di storage_host ({{ local_report_path }}) sengaja
+    # TIDAK dihapus, supaya tetap tersimpan permanen di VM Ansible.
 
 #########################################################################
 # SUCCESS
@@ -344,6 +327,7 @@
           - "========================================"
           - "HOSTNAME     : {{ raw_hostname.stdout | trim }}"
           - "STATUS       : SUCCESS"
+          - "STORAGE HOST : {{ storage_host }}"
           - "LOCAL REPORT : {{ local_report_path }}"
           - "BUCKET       : {{ minio_bucket }}"
           - "MINIO ALIAS  : {{ minio_alias }}"
