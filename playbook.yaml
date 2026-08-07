@@ -148,19 +148,21 @@
 
 
 #########################################################################
-# TARIK FILE LAPORAN VIA REKURSIF SCP (ANTI ERROR NOT A REGULAR FILE)
+# TARIK FILE LAPORAN SECARA AMAN (NAMA FILE UNIK PER HOST)
 #########################################################################
 
     - name: Download report file from target to VM Ansible using raw scp
       delegate_to: "{{ storage_host }}"
-      # Menambahkan parameter -r agar folder dan file tersalin secara rekursif tanpa interupsi
+      # Menghapus parameter -r (rekursif)
+      # Target akhir diubah menjadi nama file unik: /opt/.../hardening-{{ inventory_hostname }}-report.txt
       raw: >
         sshpass -p "{{ ansible_password }}" 
-        scp -r -o StrictHostKeyChecking=no -P {{ ansible_port | default(22) }}
-        {{ ansible_user }}@{{ inventory_hostname }}:/opt/linux_hardening_audit2_temp/hardening-{{ inventory_hostname }}-*
-        /opt/linux_hardening_audit2_temp/
+        scp -o StrictHostKeyChecking=no -P {{ ansible_port | default(22) }}
+        {{ ansible_user }}@{{ inventory_hostname }}:/opt/linux_hardening_audit2_temp/hardening-{{ inventory_hostname }}-*.txt 
+        /opt/linux_hardening_audit2_temp/hardening-{{ inventory_hostname }}-report.txt
       changed_when: true
       ignore_unreachable: true
+
 
 
 #########################################################################
