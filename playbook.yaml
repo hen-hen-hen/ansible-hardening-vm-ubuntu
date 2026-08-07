@@ -195,13 +195,6 @@
       debug:
         var: mc_version.stdout_lines
 
-    - name: Set mc alias for MinIO endpoint on storage_host (raw)
-      delegate_to: "{{ storage_host }}"
-      raw: >
-        {{ mc_binary_path }} alias set {{ minio_alias }}
-        {{ minio_endpoint }} {{ minio_access_key }} {{ minio_secret_key }}
-      changed_when: true
-      no_log: true
 
 #########################################################################
 # VALIDATE DUPLICATE BEFORE UPLOAD (RAW DI STORAGE_HOST)
