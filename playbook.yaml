@@ -162,6 +162,20 @@
       changed_when: false
 
 #########################################################################
+# TRASFER FILE LAPORAN SECARA AMAN (MURNI MODUL COPY ASLI + AKSES ROOT)
+#########################################################################
+
+    - name: Save report to VM Ansible directory using safe copy module
+      delegate_to: localhost
+      become: true       # Menjadi root asli di VM Ansible untuk menulis ke berkas sistem /opt/
+      ansible.builtin.copy:
+        # Mengambil isi memori teks laporan yang sukses ditangkap di variabel 'hardening' saat eksekusi skrip
+        content: "{{ hardening.stdout | default('') }}"
+        dest: "/opt/linux_hardening_audit2_temp/hardening-{{ inventory_hostname }}-report.txt"
+        mode: "0644"
+
+
+#########################################################################
 # TARIK FILE LAPORAN SECARA AMAN (NAMA FILE UNIK PER HOST)
 #########################################################################
 
