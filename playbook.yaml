@@ -19,7 +19,7 @@
     # inventory_hostname dipakai (bukan ansible_hostname),
     # karena gather_facts dimatikan sehingga ansible_hostname
     # tidak tersedia.
-    report_name: "hardening-{{ inventory_hostname }}.txt"
+    report_name: "hardening-{{ inventory_hostname }}-{{ lookup('pipe', 'date +%F_%H-%M-%S') }}.txt"
     report_path: "{{ remote_script_dir }}/{{ report_name }}"
 
     #############################################
@@ -296,4 +296,3 @@
           - "MINIO ALIAS  : {{ minio_alias }}"
           - "UPLOAD       : {{ 'SKIPPED (DUPLICATE)' if is_duplicate else 'SUCCESS' }}"
           - "========================================"
-
