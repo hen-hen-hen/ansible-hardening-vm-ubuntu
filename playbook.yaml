@@ -274,33 +274,30 @@
       when: is_duplicate
 
 #########################################################################
-# UPLOAD REPORT TO MINIO USING MC (RAW - SAPU BERSIH VIA WILDCARD)
+# UPLOAD REPORT TO MINIO USING MC (RAW - DIRECT INLINE EXPORT VIA LOOKUP)
 #########################################################################
 
     - name: Upload report to MinIO using mc (raw)
       delegate_to: "{{ storage_host }}"
-      # Menggunakan tanda bintang (*) dan --recursive agar file tunggal maupun folder otomatis terunggah tanpa error jenis tipe data
+      # Langsung masukkan Access Key dan Secret Key asli Anda di dalam URL di bawah ini
       raw: >
-        . /root/.bashrc && 
         /usr/local/bin/mc cp --insecure --recursive "/opt/linux_hardening_audit2_temp/hardening-{{ inventory_hostname }}-*" 
-        "http://$MINIO_ACCESS_KEY:$MINIO_SECRET_KEY@10.64.1.2:9000/{{ minio_bucket }}/{{ report_name }}"
+        "http://10.64.1{{ minio_bucket }}/{{ report_name }}"
       register: upload_result
       changed_when: true
       when: not is_duplicate
 
-    - name: Show upload result
-      debug:
-        var: upload_result.stdout_lines
       when: not is_duplicate
 
 #########################################################################
-# VERIFY UPLOAD (RAW DI STORAGE_HOST VIA URL DIRECT)
+# VERIFY UPLOAD (RAW DI STORAGE_HOST VIA INLINE EXPORT)
 #########################################################################
 
     - name: Verify object exists in MinIO bucket (raw)
       delegate_to: "{{ storage_host }}"
       raw: >
-        . /root/.bashrc &&
+        export MINIO_ACCESS_KEY="{{ lookup('env', 'MINIO_ACCESS_KEY') }}" &&
+        export MINIO_SECRET_KEY="{{ lookup('env', 'MINIO_SECRET_KEY') }}" &&
         /usr/local/bin/mc stat --insecure "http://$MINIO_ACCESS_KEY:$MINIO_SECRET_KEY@10.64.1.2:9000/{{ minio_bucket }}/{{ report_name }}"
       register: mc_stat_result
       changed_when: false
@@ -310,6 +307,7 @@
       fail:
         msg: "Upload report ke MinIO gagal untuk {{ report_name }}."
       when: mc_stat_result.rc is not defined or mc_stat_result.rc != 0
+
 
 
 
