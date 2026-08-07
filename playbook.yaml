@@ -234,14 +234,15 @@
       when: is_duplicate
 
 #########################################################################
-# UPLOAD REPORT TO MINIO USING MC (EKSEKUSI VIA ROOT VM ANSIBLE)
+# UPLOAD REPORT TO MINIO USING MC (EKSEKUSI VIA PATH ABSOLUT ROOT)
 #########################################################################
 
     - name: Upload report to MinIO using mc via root
       delegate_to: localhost
-      become: true       # Memaksa perintah berjalan sebagai ROOT ASLI VM Ansible tempat mc terinstal
+      become: true       
+      # Mengganti "mc cp" dengan jalur lengkap "/usr/local/bin/mc cp"
       ansible.builtin.shell: |
-        mc cp "/opt/linux_hardening_audit2_temp/hardening-{{ inventory_hostname }}-report.txt" "{{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}"
+        /usr/local/bin/mc cp "/opt/linux_hardening_audit2_temp/hardening-{{ inventory_hostname }}-report.txt" "{{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}"
       register: upload_result
       changed_when: true
       when: not is_duplicate
@@ -252,13 +253,14 @@
       when: not is_duplicate
 
 #########################################################################
-# VERIFY UPLOAD (MC VIA ROOT)
+# VERIFY UPLOAD (MC VIA PATH ABSOLUT ROOT)
 #########################################################################
 
     - name: Verify object exists in MinIO bucket
       delegate_to: localhost
-      become: true       # Menggunakan akses root
-      ansible.builtin.shell: "mc stat {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}"
+      become: true       
+      # Mengganti "mc stat" dengan jalur lengkap "/usr/local/bin/mc stat"
+      ansible.builtin.shell: "/usr/local/bin/mc stat {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}"
       register: mc_stat_result
       changed_when: false
       failed_when: mc_stat_result.rc != 0
@@ -267,6 +269,7 @@
       fail:
         msg: "Upload report ke MinIO gagal untuk {{ report_name }}."
       when: mc_stat_result.rc != 0
+
 
 #########################################################################
 # CLEANUP REMOTE (RAW)
