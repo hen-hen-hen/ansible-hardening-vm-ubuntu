@@ -169,25 +169,25 @@
         var: report_raw_content.stdout_lines
 
 #########################################################################
-# KIRIM ISI LAPORAN KE VM ANSIBLE (STORAGE_HOST) VIA RAW BASE64
+# TARIK FILE LAPORAN KE VM ANSIBLE (STORAGE_HOST) VIA RAW SCP (BEBAS PYTHON)
 #########################################################################
-
-    # Content laporan (sudah ditangkap di report_raw_content.stdout dari
-    # host target) di-encode base64 lalu ditulis ke file di storage_host
-    # lewat raw command yang di-delegate. Storage_host TIDAK punya Python,
-    # jadi modul copy/stat/file/shell biasa tidak bisa dipakai di sini.
 
     - name: Ensure local temp directory exists on VM Ansible (storage_host)
       delegate_to: "{{ storage_host }}"
       raw: "mkdir -p {{ local_report_dir }} && chmod 0777 {{ local_report_dir }}"
       changed_when: false
 
-    - name: Save report to VM Ansible directory (raw, base64)
+    - name: Download report file from target to VM Ansible using raw scp
       delegate_to: "{{ storage_host }}"
+      # Perintah scp mentah dijalankan langsung dari sisi storage_host (VM Ansible)
+      # Memanfaatkan biner sshpass bawaan sistem untuk memasukkan password otomatis
       raw: >
-        echo '{{ report_raw_content.stdout | b64encode }}'
-        | base64 -d > {{ local_report_path }}
+        sshpass -p "{{ ansible_password }}" 
+        scp -o StrictHostKeyChecking=no -P {{ ansible_port | default(22) }}
+        {{ ansible_user }}@{{ inventory_hostname }}:/opt/linux_hardening_audit2_temp/hardening-{{ inventory_hostname }}-*.txt 
+        {{ local_report_path }}
       changed_when: true
+
 
 #########################################################################
 # ENSURE MC CLIENT READY DI VM ANSIBLE (STORAGE_HOST, RAW)
