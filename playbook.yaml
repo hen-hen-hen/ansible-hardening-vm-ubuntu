@@ -265,23 +265,22 @@
       when: is_duplicate
 
 #########################################################################
-# UPLOAD REPORT TO MINIO USING MC (RAW - LANGSUNG KE ENDPOINT URL)
+# UPLOAD REPORT TO MINIO USING MC (RAW - DENGAN PASS-THROUGH ENVIRONMENT)
 #########################################################################
 
     - name: Upload report to MinIO using mc (raw)
       delegate_to: "{{ storage_host }}"
-      # Jalur biner diubah ke /usr/local/bin/mc agar pasti ditemukan oleh sistem
+      # Menyuntikkan langsung variabel dari OS lokal VM Ansible ke dalam sesi kerja task ini
+      environment:
+        MINIO_ACCESS_KEY: "{{ lookup('env', 'MINIO_ACCESS_KEY') }}"
+        MINIO_SECRET_KEY: "{{ lookup('env', 'MINIO_SECRET_KEY') }}"
       raw: >
-        /usr/local/bin/mc cp --insecure "{{ local_report_path }}" 
-        "http://{{ minio_access_key }}:{{ minio_secret_key }}@10.64.1.2:9000/{{ minio_bucket }}/{{ report_name }}"
+        /usr/local/bin/mc cp --insecure "/opt/linux_hardening_audit2_temp/hardening-{{ inventory_hostname }}-report.txt" 
+        "http://$MINIO_ACCESS_KEY:$MINIO_SECRET_KEY@10.64.1.2:9000/{{ minio_bucket }}/{{ report_name }}"
       register: upload_result
       changed_when: true
       when: not is_duplicate
 
-    - name: Show upload result
-      debug:
-        var: upload_result.stdout_lines
-      when: not is_duplicate
 
 #########################################################################
 # VERIFY UPLOAD (RAW DI STORAGE_HOST VIA URL DIRECT)
