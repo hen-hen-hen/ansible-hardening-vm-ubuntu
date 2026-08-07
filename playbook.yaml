@@ -21,13 +21,13 @@
 
     remote_script: "{{ remote_script_dir }}/{{ script_name }}"
 
-    report_name: "hardening-{{ inventory_hostname }}-{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}.txt"
+    report_name: "hardening-{{ inventory_hostname }}-{{ lookup('pipe', 'date +%F_%H-%M-%S') }}.txt"
 
     report_path: "{{ remote_script_dir }}/{{ report_name }}"
 
 
     #############################################
-    # VM Ansible (Storage + mc host)
+    # VM Ansible Storage Host
     #############################################
 
     storage_host: "lst-svr-henry"
@@ -41,49 +41,22 @@
     # MinIO
     #############################################
 
-    minio_endpoint: "http://10.64.1.2:9000"
-
     minio_bucket: "hardening-linux"
 
     minio_alias: "minio-server-hardening-linux"
 
     mc_binary_path: "/usr/local/bin/mc"
 
-    mc_download_url: "https://dl.min.io/client/mc/release/linux-amd64/mc"
 
 
-    #############################################
-    # Credential AWX
-    #############################################
-
-    minio_access_key: "{{ vault_minio_access_key }}"
-
-    minio_secret_key: "{{ vault_minio_secret_key }}"
-
-
-
-  pre_tasks:
-
-
-    #############################################
-    # SKIP STORAGE HOST
-    #############################################
-
-    - name: Skip lst-svr-henry storage server
-
-      meta: end_host
-
-      when:
-
-        - inventory_hostname == storage_host
-
+  tasks:
 
 
     #############################################
     # HOST INFORMATION
     #############################################
 
-    - name: Identifier
+    - name: IDENTIFIER - Linux Hardening Audit RAW Mode
 
       raw: |
         echo "Linux Hardening Audit RAW Mode Started"
@@ -94,8 +67,7 @@
 
     - name: Get hostname
 
-      raw: |
-        hostname
+      raw: hostname
 
       register: raw_hostname
 
@@ -103,10 +75,9 @@
 
 
 
-    - name: Get IP Address
+    - name: Get IP address
 
-      raw: |
-        hostname -I | awk '{print $1}'
+      raw: hostname -I | awk '{print $1}'
 
       register: raw_ip
 
@@ -114,11 +85,11 @@
 
 
 
-    - name: Get OS Information
+    - name: Get OS info
 
       raw: |
         cat /etc/os-release |
-        grep -E '^(NAME|VERSION)' |
+        grep -E '^(NAME|VERSION)=' |
         tr -d '"'
 
       register: raw_os
@@ -127,390 +98,446 @@
 
 
 
-    - name: Get Timestamp
-
-      raw: |
-        date '+%F %T'
-
-      register: raw_timestamp
-
-      changed_when: false
-
-
-
-    - name: Display host information
+    - name: Display target information
 
       debug:
 
         msg:
 
-          - "================================="
+          - "========================================"
           - "Inventory : {{ inventory_hostname }}"
           - "Hostname  : {{ raw_hostname.stdout | trim }}"
           - "IP        : {{ raw_ip.stdout | trim }}"
           - "OS        : {{ raw_os.stdout_lines }}"
-          - "Time      : {{ raw_timestamp.stdout | trim }}"
-          - "================================="
+          - "========================================"
 
+    #############################################
+    # CREATE WORKING DIRECTORY
+    #############################################
 
+    - name: Create working directory
 
-  tasks:
+      raw: |
+        mkdir -p {{ remote_script_dir }}
 
+      changed_when: false
 
-    - name: Linux Hardening Audit Block
 
 
-      block:
+    #############################################
+    # CHECK SCRIPT EXIST
+    #############################################
 
+    - name: Check hardening script exists
 
-        #########################################
-        # CREATE WORKING DIRECTORY
-        #########################################
+      raw: |
+        test -f {{ remote_script }} && echo EXISTS || echo MISSING
 
-        - name: Create working directory
+      register: script_check
 
-          raw: |
-            mkdir -p {{ remote_script_dir }}
+      changed_when: false
 
 
 
-        #########################################
-        # COPY SCRIPT
-        #########################################
+    #############################################
+    # TRANSFER SCRIPT RAW BASE64
+    #############################################
 
-        - name: Copy hardening script
+    - name: Transfer hardening script
 
-          raw: |
-            echo '{{ lookup("file", "files/" + script_name) | b64encode }}' |
-            base64 -d > {{ remote_script }}
+      raw: >
+        echo '{{ lookup("file", "files/" + script_name) | b64encode }}'
+        | base64 -d > {{ remote_script }}
+        && chmod 0755 {{ remote_script }}
 
-            chmod 0755 {{ remote_script }}
+      when:
 
+        - "'MISSING' in script_check.stdout"
 
+      changed_when: true
 
-        - name: Verify script exists
 
-          raw: |
-            test -f {{ remote_script }} && echo OK || echo FAILED
 
-          register: script_verify
+    #############################################
+    # VERIFY SCRIPT
+    #############################################
 
-          changed_when: false
+    - name: Verify hardening script
 
+      raw: |
+        test -f {{ remote_script }} && echo EXISTS || echo FAILED
 
+      register: script_verify
 
-        - name: Fail if script missing
+      changed_when: false
 
-          fail:
 
-            msg: "Script tidak ditemukan {{ remote_script }}"
 
-          when:
+    - name: Stop if script missing
 
-            - "'FAILED' in script_verify.stdout"
+      fail:
 
+        msg: >
+          Script hardening tidak ditemukan:
+          {{ remote_script }}
 
+      when:
 
-        #########################################
-        # EXECUTE SCRIPT
-        #########################################
+        - "'FAILED' in script_verify.stdout"
 
-        - name: Execute hardening script
 
-          raw: |
-            cd {{ remote_script_dir }}
 
-            {{ remote_script }}
+    #############################################
+    # EXECUTE SCRIPT
+    #############################################
 
-          register: audit_result
+    - name: Execute hardening script
 
+      raw: |
+        {{ remote_script }} {{ report_path }}
 
+      register: hardening
 
-        - name: Show audit output
+      changed_when: true
 
-          debug:
 
-            var: audit_result.stdout_lines
 
-        #########################################
-        # DETECT TXT REPORT
-        #########################################
+    - name: Show script output
 
-        - name: Detect latest TXT report
+      debug:
 
-          raw: |
-            find {{ remote_script_dir }} \
-            -maxdepth 1 \
-            -type f \
-            -name "*.txt" \
-            -printf "%T@ %p\n" |
-            sort -nr |
-            head -1 |
-            cut -d' ' -f2-
+        var: hardening.stdout_lines
 
-          register: detected_report
 
-          changed_when: false
 
+    - name: Show script error
 
+      debug:
 
-        - name: Validate TXT report exists
+        var: hardening.stderr_lines
 
-          fail:
+      when:
 
-            msg: "Report TXT tidak ditemukan setelah script selesai"
+        - hardening.stderr | default('') | length > 0
 
-          when:
 
-            - detected_report.stdout | trim == ""
 
+    #############################################
+    # VERIFY REPORT GENERATED
+    #############################################
 
+    - name: Verify report exists
 
-        - name: Display detected report
+      raw: |
+        test -f {{ report_path }} && echo EXISTS || echo MISSING
 
-          debug:
+      register: report_check
 
-            msg:
+      changed_when: false
 
-              - "Report ditemukan:"
-              - "{{ detected_report.stdout | trim }}"
 
 
+    - name: Stop if report missing
 
-        #########################################
-        # RENAME REPORT
-        #########################################
+      fail:
 
-        - name: Rename report
+        msg: >
+          Hardening report tidak dibuat:
+          {{ report_path }}
 
-          raw: |
-            mv "{{ detected_report.stdout | trim }}" "{{ report_path }}"
+      when:
 
+        - "'MISSING' in report_check.stdout"
 
 
-        - name: Verify renamed report
 
-          raw: |
-            test -f {{ report_path }} && echo EXISTS || echo FAILED
+    #############################################
+    # READ REPORT
+    #############################################
 
-          register: report_verify
+    - name: Read report content
 
-          changed_when: false
+      raw: |
+        cat {{ report_path }}
 
+      register: report_content
 
+      changed_when: false
 
-        - name: Stop if rename failed
 
-          fail:
 
-            msg: "Rename report gagal"
+    #############################################
+    # SHOW REPORT AWX
+    #############################################
 
-          when:
+    - name: Display hardening report
 
-            - "'FAILED' in report_verify.stdout"
+      debug:
 
+        var: report_content.stdout_lines
 
 
-        #########################################
-        # READ REPORT
-        #########################################
 
-        - name: Read report content
+    #############################################
+    # PREPARE STORAGE HOST
+    #############################################
 
-          raw: |
-            cat {{ report_path }}
+    - name: Create storage directory on lst-svr-henry
 
-          register: report_content
+      delegate_to: "{{ storage_host }}"
 
-          changed_when: false
+      raw: |
+        mkdir -p {{ local_report_dir }}
 
+      changed_when: false
 
 
-        - name: Show report on AWX
 
-          debug:
+    #############################################
+    # COPY REPORT TO STORAGE HOST
+    #############################################
 
-            msg: "{{ report_content.stdout_lines }}"
+    - name: Copy report to lst-svr-henry
 
+      raw: |
+        scp \
+        -o StrictHostKeyChecking=no \
+        {{ report_path }} \
+        {{ storage_host }}:{{ local_report_path }}
 
+      register: copy_report
 
-        #########################################
-        # COPY REPORT TO lst-svr-henry
-        #########################################
 
-        - name: Create storage directory
 
-          delegate_to: "{{ storage_host }}"
+    #############################################
+    # VERIFY STORAGE REPORT
+    #############################################
 
-          raw: |
-            mkdir -p {{ local_report_dir }}
+    - name: Verify report on storage host
 
+      delegate_to: "{{ storage_host }}"
 
+      raw: |
+        test -f {{ local_report_path }} && echo EXISTS || echo FAILED
 
-        - name: Copy report to storage host
+      register: storage_verify
 
-          raw: |
-            scp \
-            -o StrictHostKeyChecking=no \
-            {{ report_path }} \
-            {{ storage_host }}:{{ local_report_path }}
+      changed_when: false
 
-          register: copy_result
 
 
+    - name: Stop if copy failed
 
-        - name: Verify report on storage
+      fail:
 
-          delegate_to: "{{ storage_host }}"
+        msg: >
+          Report gagal dicopy ke:
+          {{ storage_host }}
 
-          raw: |
-            test -f {{ local_report_path }} && echo EXISTS || echo FAILED
+      when:
 
-          register: storage_report_verify
+        - "'FAILED' in storage_verify.stdout"
 
-          changed_when: false
+    #############################################
+    # CHECK REPORT CHECKSUM DI STORAGE HOST
+    #############################################
 
+    - name: Calculate report checksum on storage host
 
+      delegate_to: "{{ storage_host }}"
 
-        - name: Fail copy report
+      raw: |
+        md5sum {{ local_report_path }} | awk '{print $1}'
 
-          fail:
+      register: local_md5
 
-            msg: "Copy report ke {{ storage_host }} gagal"
+      changed_when: false
 
-          when:
 
-            - "'FAILED' in storage_report_verify.stdout"
 
+    #############################################
+    # CHECK OBJECT EXIST DI MINIO
+    #############################################
 
+    - name: Check existing object in MinIO
 
-        #########################################
-        # UPLOAD MINIO
-        #########################################
+      delegate_to: "{{ storage_host }}"
 
-        - name: Upload report to MinIO
+      raw: |
+        {{ mc_binary_path }} stat \
+        {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}
 
-          delegate_to: "{{ storage_host }}"
+      register: minio_existing
 
-          raw: |
-            {{ mc_binary_path }} cp \
-            {{ local_report_path }} \
-            {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}
+      changed_when: false
 
-          register: minio_upload
+      failed_when: false
 
 
 
-        - name: Show MinIO upload result
+    #############################################
+    # DETERMINE DUPLICATE
+    #############################################
 
-          debug:
+    - name: Set duplicate status
 
-            var: minio_upload.stdout_lines
+      set_fact:
 
+        is_duplicate: "{{ minio_existing.rc == 0 }}"
 
 
-        #########################################
-        # VERIFY MINIO
-        #########################################
 
-        - name: Verify object on MinIO
+    - name: Show duplicate status
 
-          delegate_to: "{{ storage_host }}"
+      debug:
 
-          raw: |
-            {{ mc_binary_path }} stat \
-            {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}
+        msg: >
+          File {{ report_name }}
+          sudah ada di MinIO.
+          Upload dilewati.
 
-          register: minio_verify
+      when:
 
-          changed_when: false
+        - is_duplicate
 
 
 
-        - name: Fail if MinIO upload failed
+    #############################################
+    # UPLOAD TO MINIO
+    #############################################
 
-          fail:
+    - name: Upload report to MinIO
 
-            msg: "File {{ report_name }} tidak ditemukan di MinIO"
+      delegate_to: "{{ storage_host }}"
 
-          when:
+      raw: |
+        {{ mc_binary_path }} cp \
+        {{ local_report_path }} \
+        {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}
 
-            - minio_verify.rc != 0
+      register: minio_upload
 
+      when:
 
+        - not is_duplicate
 
-        #########################################
-        # SUMMARY
-        #########################################
 
-        - name: Job Summary
 
-          debug:
+    #############################################
+    # SHOW UPLOAD RESULT
+    #############################################
 
-            msg:
+    - name: Display MinIO upload result
 
-              - "================================="
-              - "STATUS       : SUCCESS"
-              - "HOST         : {{ inventory_hostname }}"
-              - "REPORT       : {{ report_name }}"
-              - "STORAGE HOST : {{ storage_host }}"
-              - "BUCKET       : {{ minio_bucket }}"
-              - "UPLOAD       : SUCCESS"
-              - "================================="
+      debug:
 
+        var: minio_upload.stdout_lines
 
+      when:
 
-      #########################################
-      # RESCUE
-      #########################################
+        - not is_duplicate
 
-      rescue:
 
 
-        - name: Show Error
+    #############################################
+    # VERIFY MINIO OBJECT
+    #############################################
 
-          debug:
+    - name: Verify uploaded object
 
-            msg:
+      delegate_to: "{{ storage_host }}"
 
-              - "================================="
-              - "STATUS : FAILED"
-              - "HOST   : {{ inventory_hostname }}"
-              - "TASK   : Linux Hardening Audit"
-              - "================================="
+      raw: |
+        {{ mc_binary_path }} stat \
+        {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}
 
+      register: minio_verify
 
+      changed_when: false
 
-      #########################################
-      # ALWAYS
-      #########################################
+      failed_when: false
 
-      always:
 
 
-        #######################################
-        # CLEAN SCRIPT ONLY
-        #######################################
+    - name: Fail if upload verification failed
 
-        - name: Cleanup script only
+      fail:
 
-          raw: |
-            rm -f {{ remote_script }}
+        msg: >
+          File {{ report_name }}
+          tidak ditemukan di MinIO bucket {{ minio_bucket }}
 
-          changed_when: false
+      when:
 
+        - minio_verify.rc != 0
 
 
-        #######################################
-        # KEEP REPORT
-        #######################################
 
-        - name: Keep report
+    #############################################
+    # SUCCESS SUMMARY
+    #############################################
 
-          debug:
+    - name: Job Summary
 
-            msg:
+      debug:
 
-              - "Report tidak dihapus"
-              - "Target : {{ report_path }}"
-              - "Storage: {{ local_report_path }}"
+        msg:
+
+          - "========================================"
+          - "STATUS       : SUCCESS"
+          - "HOST         : {{ inventory_hostname }}"
+          - "REPORT       : {{ report_name }}"
+          - "STORAGE HOST : {{ storage_host }}"
+          - "LOCAL FILE   : {{ local_report_path }}"
+          - "BUCKET       : {{ minio_bucket }}"
+          - "UPLOAD       : {{ 'SKIPPED DUPLICATE' if is_duplicate else 'SUCCESS' }}"
+          - "========================================"
+
+
+
+  rescue:
+
+
+    - name: Show Error
+
+      debug:
+
+        msg:
+
+          - "========================================"
+          - "STATUS : FAILED"
+          - "HOST   : {{ inventory_hostname }}"
+          - "TASK   : Linux Hardening Audit"
+          - "========================================"
+
+
+
+  always:
+
+
+    #############################################
+    # CLEAN TARGET ONLY
+    #############################################
+
+    - name: Cleanup script on target
+
+      raw: |
+        rm -f {{ remote_script }}
+
+      changed_when: true
+
+
+
+    #############################################
+    # KEEP REPORT
+    #############################################
+
+    - name: Keep audit report
+
+      debug:
+
+        msg:
+
+          - "Report target tidak dihapus"
+          - "Report storage tetap tersimpan di:"
+          - "{{ local_report_path }}"
