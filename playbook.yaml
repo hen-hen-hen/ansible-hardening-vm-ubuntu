@@ -240,8 +240,9 @@
 
     - name: Upload report to MinIO using mc
       delegate_to: localhost
+      # Cukup panggil "mc" langsung tanpa path panjang
       command: >
-        {{ mc_binary_path }} cp {{ local_report_path }}
+        mc cp {{ local_report_path }}
         {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}
       register: upload_result
       changed_when: true
@@ -258,7 +259,8 @@
 
     - name: Verify object exists in MinIO bucket
       delegate_to: localhost
-      command: "{{ mc_binary_path }} stat {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}"
+      # Cukup panggil "mc" langsung di sini juga
+      command: "mc stat {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}"
       register: mc_stat_result
       changed_when: false
       failed_when: mc_stat_result.rc != 0
@@ -267,6 +269,7 @@
       fail:
         msg: "Upload report ke MinIO gagal untuk {{ report_name }}."
       when: mc_stat_result.rc != 0
+
 
 #########################################################################
 # CLEANUP REMOTE (RAW)
