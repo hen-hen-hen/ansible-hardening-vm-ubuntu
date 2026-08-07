@@ -1,21 +1,24 @@
 ---
-- name: Linux Hardening Audit
+- name: Linux Hardening Audit (Raw Mode - Tanpa Python di Target)
   hosts: all
   become: true
-  gather_facts: true
+  gather_facts: false
 
   vars:
 
     #############################################
     # Script Hardening
     # NOTE: jika script sudah ada di host target,
-    # copy akan di-skip otomatis (idempoten)
+    # transfer akan di-skip otomatis (idempoten)
     #############################################
 
     script_name: linux_hardening_audit2.sh
     remote_script: /opt/linux_hardening_audit2.sh
 
-    report_name: "hardening-{{ ansible_hostname }}.txt"
+    # inventory_hostname dipakai (bukan ansible_hostname),
+    # karena gather_facts dimatikan sehingga ansible_hostname
+    # tidak tersedia.
+    report_name: "hardening-{{ inventory_hostname }}.txt"
     report_path: "/opt/{{ report_name }}"
 
     #############################################
@@ -41,76 +44,81 @@
   tasks:
 
 #########################################################################
-# HOST INFORMATION
+# HOST INFORMATION (RAW, TANPA GATHER FACTS)
 #########################################################################
+
+    - name: IDENTIFIER - Linux Hardening Audit (raw mode)
+      raw: 'echo "Playbook loaded - Linux Hardening Audit (raw mode)"'
+      changed_when: false
+
+    - name: Get hostname (raw)
+      raw: hostname
+      register: raw_hostname
+      changed_when: false
+
+    - name: Get IP address (raw)
+      raw: "hostname -I | awk '{print $1}'"
+      register: raw_ip
+      changed_when: false
+
+    - name: Get OS info (raw)
+      raw: "cat /etc/os-release | grep -E '^(NAME|VERSION)=' | tr -d '\"'"
+      register: raw_os
+      changed_when: false
 
     - name: Display target information
       debug:
         msg:
           - "========================================"
           - "Inventory : {{ inventory_hostname }}"
-          - "Hostname  : {{ ansible_hostname }}"
-          - "IP        : {{ ansible_default_ipv4.address }}"
-          - "OS        : {{ ansible_distribution }} {{ ansible_distribution_version }}"
+          - "Hostname  : {{ raw_hostname.stdout | trim }}"
+          - "IP        : {{ raw_ip.stdout | trim }}"
+          - "OS        : {{ raw_os.stdout_lines | default([]) }}"
           - "========================================"
 
 #########################################################################
-# ENSURE SCRIPT EXISTS ON TARGET (COPY HANYA JIKA BELUM ADA)
+# ENSURE SCRIPT EXISTS ON TARGET (RAW, TRANSFER HANYA JIKA BELUM ADA)
 #########################################################################
 
-    # Jika script sudah ada di host target (mis. sudah pernah di-deploy
-    # manual seperti di lst-svr-henry), copy DI-SKIP.
-    # Jika belum ada, script akan di-copy dari AWX Project files/.
-
-    - name: Check if hardening script already exists on target host
-      stat:
-        path: "{{ remote_script }}"
+    - name: Check if hardening script already exists on target (raw)
+      raw: "test -f {{ remote_script }} && echo EXISTS || echo MISSING"
       register: script_check_before
+      changed_when: false
 
-    - name: Copy hardening script from AWX Project (jika belum ada di host)
-      copy:
-        src: "files/{{ script_name }}"
-        dest: "{{ remote_script }}"
-        owner: root
-        group: root
-        mode: "0755"
-      when: not script_check_before.stat.exists
+    # Transfer file dilakukan dengan encode isi script lokal (di control
+    # node) jadi base64, lalu di-decode kembali langsung di sisi target
+    # lewat raw command. Ini menggantikan modul "copy" yang butuh Python.
+    - name: Transfer hardening script to target (raw, base64)
+      raw: >
+        echo '{{ lookup('file', 'files/' + script_name) | b64encode }}'
+        | base64 -d > {{ remote_script }} && chmod 0755 {{ remote_script }}
+      when: "'MISSING' in script_check_before.stdout"
+      changed_when: true
 
-    - name: Verify hardening script exists on target host
-      stat:
-        path: "{{ remote_script }}"
+    - name: Verify hardening script exists after transfer (raw)
+      raw: "test -f {{ remote_script }} && echo EXISTS || echo MISSING"
       register: script_check_after
+      changed_when: false
 
     - name: Stop if hardening script still not found
       fail:
         msg: >
-          Script hardening tidak ditemukan di {{ remote_script }} pada host
-          {{ ansible_hostname }}, dan gagal di-copy dari AWX Project.
-          Pastikan file {{ script_name }} ada di folder files/ pada repo,
-          atau taruh manual di path tersebut pada host target.
-      when: not script_check_after.stat.exists
+          Script hardening tidak ditemukan/berhasil ditransfer ke
+          {{ remote_script }} pada host {{ inventory_hostname }}.
+      when: "'MISSING' in script_check_after.stdout"
 
-    - name: Ensure script is executable
-      file:
-        path: "{{ remote_script }}"
-        owner: root
-        group: root
-        mode: "0755"
+    - name: Ensure script is executable (raw)
+      raw: "chmod 0755 {{ remote_script }}"
+      changed_when: false
 
 #########################################################################
-# EXECUTE SCRIPT
+# EXECUTE SCRIPT (RAW)
 #########################################################################
 
-    - name: Execute hardening script
-      shell: "{{ remote_script }} {{ report_path }}"
-      args:
-        executable: /bin/bash
+    - name: Execute hardening script (raw)
+      raw: "{{ remote_script }} {{ report_path }}"
       register: hardening
       changed_when: true
-
-#########################################################################
-# SHOW OUTPUT
-#########################################################################
 
     - name: Show script output
       debug:
@@ -119,28 +127,28 @@
     - name: Show script error
       debug:
         var: hardening.stderr_lines
-      when: hardening.stderr != ""
+      when: hardening.stderr | default('') | length > 0
 
 #########################################################################
-# VERIFY REPORT (REMOTE)
+# VERIFY REPORT (REMOTE, RAW)
 #########################################################################
 
-    - name: Verify report exists
-      stat:
-        path: "{{ report_path }}"
-      register: report
+    - name: Verify report exists (raw)
+      raw: "test -f {{ report_path }} && echo EXISTS || echo MISSING"
+      register: report_check
+      changed_when: false
 
     - name: Stop if report missing
       fail:
         msg: "Hardening report was not generated."
-      when: not report.stat.exists
+      when: "'MISSING' in report_check.stdout"
 
 #########################################################################
-# SHOW REPORT
+# SHOW REPORT (RAW)
 #########################################################################
 
-    - name: Display report
-      shell: cat "{{ report_path }}"
+    - name: Display report (raw)
+      raw: "cat {{ report_path }}"
       register: report_content
       changed_when: false
 
@@ -148,29 +156,37 @@
         var: report_content.stdout_lines
 
 #########################################################################
-# PREPARE LOCAL STORAGE (ANSIBLE VM)
+# PREPARE LOCAL STORAGE (ANSIBLE VM - PYTHON TERSEDIA DI SINI)
 #########################################################################
 
     - name: Ensure local temp directory exists on Ansible VM
       delegate_to: localhost
-      run_once: false
       file:
         path: "{{ local_report_dir }}"
         state: directory
         mode: "0755"
 
 #########################################################################
-# FETCH REPORT TO ANSIBLE LOCAL VM
+# FETCH REPORT TO ANSIBLE LOCAL VM (RAW CAT + LOCAL COPY)
 #########################################################################
 
-    - name: Fetch report to local Ansible VM
-      fetch:
-        src: "{{ report_path }}"
+    # Modul "fetch" butuh Python di remote (via slurp), jadi diganti:
+    # baca isi file lewat raw "cat", lalu simpan hasilnya ke file lokal
+    # dari sisi control node (delegate_to localhost, Python tersedia).
+
+    - name: Read report content from target (raw)
+      raw: "cat {{ report_path }}"
+      register: report_raw_content
+      changed_when: false
+
+    - name: Save report to local Ansible VM
+      delegate_to: localhost
+      copy:
+        content: "{{ report_raw_content.stdout }}"
         dest: "{{ local_report_path }}"
-        flat: yes
 
 #########################################################################
-# VALIDATE DUPLICATE BEFORE UPLOAD
+# VALIDATE DUPLICATE BEFORE UPLOAD (LOCAL, PYTHON TERSEDIA)
 #########################################################################
 
     # Catatan: perbandingan checksum ini akurat untuk file yang diupload
@@ -242,18 +258,16 @@
       when: mc_stat_result.rc != 0
 
 #########################################################################
-# CLEANUP REMOTE
+# CLEANUP REMOTE (RAW)
 #########################################################################
 
-    - name: Remove report (remote host)
-      file:
-        path: "{{ report_path }}"
-        state: absent
+    - name: Remove report from target (raw)
+      raw: "rm -f {{ report_path }}"
+      changed_when: true
 
-    - name: Remove script (remote host)
-      file:
-        path: "{{ remote_script }}"
-        state: absent
+    - name: Remove script from target (raw)
+      raw: "rm -f {{ remote_script }}"
+      changed_when: true
 
 #########################################################################
 # NOTE: LOCAL REPORT FILE
@@ -261,8 +275,6 @@
 
     # File laporan lokal sengaja TIDAK dihapus, karena sesuai permintaan
     # laporan harus tetap tersimpan di {{ local_report_dir }} pada VM Ansible.
-    # Jika ke depannya ingin dihapus otomatis setelah upload sukses,
-    # tinggal tambahkan task "file: state: absent" delegate_to localhost.
 
 #########################################################################
 # SUCCESS
@@ -272,7 +284,7 @@
       debug:
         msg:
           - "========================================"
-          - "HOSTNAME     : {{ ansible_hostname }}"
+          - "HOSTNAME     : {{ raw_hostname.stdout | trim }}"
           - "STATUS       : SUCCESS"
           - "LOCAL REPORT : {{ local_report_path }}"
           - "BUCKET       : {{ minio_bucket }}"
