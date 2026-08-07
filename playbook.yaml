@@ -146,6 +146,20 @@
         - hardening.stderr is defined
         - hardening.stderr | default('') | length > 0
 
+#########################################################################
+# TUGAS PENYELAMAT: TUNGGU VM TARGET SELESAI REBOOT / RESTART SSH
+#########################################################################
+
+    - name: Wait for target SSH ports to recover using raw echo
+      # Menggunakan perintah ringan mentah untuk menguji stabilitas login SSH
+      raw: echo "Koneksi Aman"
+      register: ssh_recovery_test
+      # Ulangi terus perintah ini jika koneksi masih melempar error (rc != 0)
+      until: ssh_recovery_test.rc is defined and ssh_recovery_test.rc == 0
+      retries: 30       # Batas maksimal mencoba ulang sebanyak 30 kali
+      delay: 10         # Beri jeda waktu 10 detik di setiap percobaan (Total penantian maksimal 5 menit)
+      ignore_errors: true
+      changed_when: false
 
 #########################################################################
 # TARIK FILE LAPORAN SECARA AMAN (NAMA FILE UNIK PER HOST)
