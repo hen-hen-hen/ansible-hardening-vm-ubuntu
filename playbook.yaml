@@ -144,14 +144,20 @@
         - hardening.stderr | default('') | length > 0
 
 #########################################################################
-# TUGAS PENYELAMAT: TUNGGU VM BENAR-BENAR SIAP MENERIMA KONEKSI SSH
+# TUGAS PENYELAMAT: TUNGGU VM SIAP VIA RAW SSH (TANPA PYTHON)
 #########################################################################
 
-    - name: Wait for target VMs to be fully reachable via SSH
-      # Modul ini secara otomatis menguji koneksi login SSH sesungguhnya
-      ansible.builtin.wait_for_connection:
-        delay: 15          # Beri jeda 15 detik sebelum percobaan pertama (menunggu reboot/restart selesai)
-        timeout: 300       # Perpanjang waktu tunggu jadi 5 menit (mengantisipasi zabbixserver yang lambat boot)
+    - name: Wait for SSH to recover using raw connection
+      # Menjalankan perintah ringan mentah untuk tes koneksi login
+      raw: whoami
+      register: ssh_test
+      # Ulangi terus perintah ini jika terjadi error koneksi
+      until: ssh_test.rc is defined and ssh_test.rc == 0
+      retries: 30       # Lakukan percobaan maksimal 30 kali
+      delay: 10         # Beri jeda 10 detik di setiap percobaan (Total tunggu maksimal 5 menit)
+      ignore_errors: true
+      changed_when: false
+
 
 #########################################################################
 # VERIFY REPORT (REMOTE, RAW)
