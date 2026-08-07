@@ -1,50 +1,207 @@
 ---
 - name: Linux Hardening Audit
   hosts: all
-  gather_facts: false
   become: true
+  gather_facts: true
 
   vars:
-    remote_script: /tmp/linux_hardening_audit.sh
-    report_name: "hardening-{{ inventory_hostname }}.txt"
+
+    #############################################
+    # Script Hardening
+    #############################################
+
+    script_name: linux_hardening_audit2.sh
+    remote_script: /opt/linux_hardening_audit2.sh
+
+    report_name: "hardening-{{ ansible_hostname }}.txt"
+    report_path: "/opt/{{ report_name }}"
+
+    #############################################
+    # Penyimpanan Lokal di VM Ansible
+    #############################################
+
+    local_report_dir: "/opt/linux_hardening_audit2_temp"
+    local_report_path: "{{ local_report_dir }}/{{ report_name }}"
+
+    #############################################
+    # MinIO Client (mc)
+    # NOTE: mc harus sudah terinstall & alias sudah
+    # dikonfigurasi sebelumnya di VM Ansible ini
+    # (mc alias set {{ minio_alias }} {{ minio_endpoint }} <access_key> <secret_key>)
+    #############################################
+
+    minio_bucket: "hardening-linux"
+    minio_alias: "miniolocal"
+
+    mc_binary_path: "/usr/local/bin/mc"
 
   tasks:
 
-    - name: Copy audit script
-      copy:
-      src: files/linux_hardening_audit.sh
-      dest: /tmp/linux_hardening_audit.sh
-      mode: "0755"
+#########################################################################
+# HOST INFORMATION
+#########################################################################
 
-    - name: Execute audit
-      shell: "{{ remote_script }} /tmp/{{ report_name }}"
-      register: audit_result
-      changed_when: false
-
-    - name: Show execution result
+    - name: Display target information
       debug:
-        var: audit_result.stdout_lines
+        msg:
+          - "========================================"
+          - "Inventory : {{ inventory_hostname }}"
+          - "Hostname  : {{ ansible_hostname }}"
+          - "IP        : {{ ansible_default_ipv4.address }}"
+          - "OS        : {{ ansible_distribution }} {{ ansible_distribution_version }}"
+          - "========================================"
+
+#########################################################################
+# COPY SCRIPT
+#########################################################################
+
+    - name: Copy hardening script
+      copy:
+        src: "../files/{{ script_name }}"
+        dest: "{{ remote_script }}"
+        owner: root
+        group: root
+        mode: "0755"
+
+#########################################################################
+# EXECUTE SCRIPT
+#########################################################################
+
+    - name: Execute hardening script
+      shell: "{{ remote_script }} {{ report_path }}"
+      args:
+        executable: /bin/bash
+      register: hardening
+      changed_when: true
+
+#########################################################################
+# SHOW OUTPUT
+#########################################################################
+
+    - name: Show script output
+      debug:
+        var: hardening.stdout_lines
+
+    - name: Show script error
+      debug:
+        var: hardening.stderr_lines
+      when: hardening.stderr != ""
+
+#########################################################################
+# VERIFY REPORT (REMOTE)
+#########################################################################
+
+    - name: Verify report exists
+      stat:
+        path: "{{ report_path }}"
+      register: report
+
+    - name: Stop if report missing
+      fail:
+        msg: "Hardening report was not generated."
+      when: not report.stat.exists
+
+#########################################################################
+# SHOW REPORT
+#########################################################################
 
     - name: Display report
-      shell: cat /tmp/{{ report_name }}
-      register: report_output
+      shell: cat "{{ report_path }}"
+      register: report_content
       changed_when: false
 
     - debug:
-        var: report_output.stdout_lines
+        var: report_content.stdout_lines
 
-    - name: Fetch report
+#########################################################################
+# PREPARE LOCAL STORAGE (ANSIBLE VM)
+#########################################################################
+
+    - name: Ensure local temp directory exists on Ansible VM
+      delegate_to: localhost
+      run_once: false
+      file:
+        path: "{{ local_report_dir }}"
+        state: directory
+        mode: "0755"
+
+#########################################################################
+# FETCH REPORT TO ANSIBLE LOCAL VM
+#########################################################################
+
+    - name: Fetch report to local Ansible VM
       fetch:
-        src: "/tmp/{{ report_name }}"
-        dest: reports/
+        src: "{{ report_path }}"
+        dest: "{{ local_report_path }}"
         flat: yes
 
-    - name: Cleanup report
+#########################################################################
+# UPLOAD REPORT TO MINIO USING MC
+#########################################################################
+
+    - name: Upload report to MinIO using mc
+      delegate_to: localhost
+      command: >
+        {{ mc_binary_path }} cp {{ local_report_path }}
+        {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}
+      register: upload_result
+      changed_when: true
+
+    - name: Show upload result
+      debug:
+        var: upload_result.stdout_lines
+
+#########################################################################
+# VERIFY UPLOAD (MC)
+#########################################################################
+
+    - name: Verify object exists in MinIO bucket
+      delegate_to: localhost
+      command: "{{ mc_binary_path }} stat {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}"
+      register: mc_stat_result
+      changed_when: false
+      failed_when: mc_stat_result.rc != 0
+
+    - name: Upload validation
+      fail:
+        msg: "Upload report ke MinIO gagal untuk {{ report_name }}."
+      when: mc_stat_result.rc != 0
+
+#########################################################################
+# CLEANUP REMOTE
+#########################################################################
+
+    - name: Remove report (remote host)
       file:
-        path: "/tmp/{{ report_name }}"
+        path: "{{ report_path }}"
         state: absent
 
-    - name: Cleanup script
+    - name: Remove script (remote host)
       file:
         path: "{{ remote_script }}"
         state: absent
+
+#########################################################################
+# NOTE: LOCAL REPORT FILE
+#########################################################################
+
+    # File laporan lokal sengaja TIDAK dihapus, karena sesuai permintaan
+    # laporan harus tetap tersimpan di {{ local_report_dir }} pada VM Ansible.
+    # Jika ke depannya ingin dihapus otomatis setelah upload sukses,
+    # tinggal tambahkan task "file: state: absent" delegate_to localhost.
+
+#########################################################################
+# SUCCESS
+#########################################################################
+
+    - name: Job Summary
+      debug:
+        msg:
+          - "========================================"
+          - "HOSTNAME     : {{ ansible_hostname }}"
+          - "STATUS       : SUCCESS"
+          - "LOCAL REPORT : {{ local_report_path }}"
+          - "BUCKET       : {{ minio_bucket }}"
+          - "MINIO ALIAS  : {{ minio_alias }}"
+          - "UPLOAD       : SUCCESS"
+          - "========================================"
