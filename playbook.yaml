@@ -128,37 +128,49 @@
       raw: "{{ remote_script }} {{ report_path }}"
       register: hardening
       changed_when: true
-      # Ditambahkan agar playbook tidak langsung berhenti saat SSH terputus:
       ignore_errors: true
       ignore_unreachable: true
-      
+
     - name: Show script output
       debug:
         var: hardening.stdout_lines
-      when: hardening.stdout_lines is defined        
+      when: hardening.stdout_lines is defined
 
     - name: Show script error
       debug:
         var: hardening.stderr_lines
-      when: hardening.stderr | default('') | length > 0
+      when: 
+        - hardening.stderr is defined
+        - hardening.stderr | default('') | length > 0
+
+#########################################################################
+# TUGAS PENYELAMAT: TUNGGU SSH KEMBALI ONLINE
+#########################################################################
+
+    - name: Wait for SSH connection to recover after script execution
+      delegate_to: localhost
+      # Menggunakan ansible.builtin.wait_for untuk memeriksa port SSH (22) di target
+      ansible.builtin.wait_for:
+        host: "{{ inventory_hostname }}"
+        port: 22
+        delay: 5          # Beri jeda 5 detik sebelum mulai mengecek
+        timeout: 120      # Batas waktu maksimal menunggu (2 menit)
+        state: started
 
 #########################################################################
 # VERIFY REPORT (REMOTE, RAW)
 #########################################################################
 
     - name: Verify report exists (raw)
-      # Menggunakan exit code shell: jika file ada exit 0 (sukses), jika tidak ada exit 1 (gagal)
       raw: "test -f {{ report_path }}"
       register: report_check
-      # Abaikan error shell agar playbook tidak langsung berhenti di sini
       ignore_errors: true
       changed_when: false
 
     - name: Stop if report missing
       fail:
         msg: "Hardening report was not generated di {{ report_path }}."
-      # Cukup cek rc (return code). Jika rc != 0, artinya file tidak ditemukan.
-      when: report_check.rc is defined and report_check.rc != 0
+      when: report_check.rc is not defined or report_check.rc != 0
 
 #########################################################################
 # SHOW REPORT (RAW)
