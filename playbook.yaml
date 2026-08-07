@@ -144,47 +144,37 @@
         - hardening.stderr | default('') | length > 0
 
 #########################################################################
-# TUGAS PENYELAMAT: TUNGGU VM SIAP VIA RAW SSH (TANPA PYTHON)
+# READ REPORT (REMOTE, RAW, ANTI-DISCONNECT & WILDCARD)
 #########################################################################
 
-    - name: Wait for SSH to recover using raw connection
-      # Menjalankan perintah ringan mentah untuk tes koneksi login
-      raw: whoami
-      register: ssh_test
-      # Ulangi terus perintah ini jika terjadi error koneksi
-      until: ssh_test.rc is defined and ssh_test.rc == 0
-      retries: 30       # Lakukan percobaan maksimal 30 kali
-      delay: 10         # Beri jeda 10 detik di setiap percobaan (Total tunggu maksimal 5 menit)
+    - name: Read report content from target (raw with retry)
+      # Menggunakan wildcard (*) agar tidak terpengaruh perubahan variabel jam/menit pada nama file
+      raw: "cat /opt/linux_hardening_audit2_temp/hardening-{{ inventory_hostname }}-*.txt"
+      register: report_raw_content
+      # Ulangi otomatis jika SSH memutus koneksi (rc != 0 atau ada kata 'closed' di stderr)
+      until: >
+        report_raw_content.rc is defined and 
+        report_raw_content.rc == 0 and 
+        'closed' not in (report_raw_content.stderr | default(''))
+      retries: 15       # Coba ulang sampai 15 kali jika koneksi gagal
+      delay: 10         # Beri jeda 10 detik di setiap percobaan ulang
       ignore_errors: true
       changed_when: false
 
-
-#########################################################################
-# VERIFY REPORT (REMOTE, RAW)
-#########################################################################
-
-    - name: Verify report exists (raw)
-      raw: "test -f {{ report_path }}"
-      register: report_check
-      ignore_errors: true
-      changed_when: false
-
-    - name: Stop if report missing
+    - name: Stop if report missing or unreadable
       fail:
-        msg: "Hardening report was not generated di {{ report_path }}."
-      when: report_check.rc is not defined or report_check.rc != 0
+        msg: "Hardening report was not generated or target SSH is completely unstable."
+      # Jika setelah dicoba berulang-ulang tetap gagal membaca file
+      when: report_raw_content.rc is not defined or report_raw_content.rc != 0
 
 #########################################################################
-# SHOW REPORT (RAW)
+# DISPLAY REPORT (RAW)
 #########################################################################
 
     - name: Display report (raw)
-      raw: "cat {{ report_path }}"
-      register: report_content
-      changed_when: false
+      debug:
+        var: report_raw_content.stdout_lines
 
-    - debug:
-        var: report_content.stdout_lines
 
 #########################################################################
 # PREPARE LOCAL STORAGE (ANSIBLE VM - PYTHON TERSEDIA DI SINI)
