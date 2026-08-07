@@ -158,15 +158,13 @@
 
     - name: Download report file from target to VM Ansible using raw scp
       delegate_to: "{{ storage_host }}"
-      # Perintah scp mentah dijalankan langsung dari sisi storage_host (VM Ansible)
-      # Memanfaatkan biner sshpass bawaan sistem untuk memasukkan password otomatis
+      # Target tujuan di ujung bawah diubah murni ke direktori /opt/linux_hardening_audit2_temp/
       raw: >
         sshpass -p "{{ ansible_password }}" 
         scp -o StrictHostKeyChecking=no -P {{ ansible_port | default(22) }}
         {{ ansible_user }}@{{ inventory_hostname }}:/opt/linux_hardening_audit2_temp/hardening-{{ inventory_hostname }}-*.txt 
-        {{ local_report_path }}
+        /opt/linux_hardening_audit2_temp/
       changed_when: true
-      # Pastikan posisi spasi di bawah ini sejajar lurus dengan changed_when di atas
       ignore_unreachable: true
 
 #########################################################################
