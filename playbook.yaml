@@ -128,10 +128,14 @@
       raw: "{{ remote_script }} {{ report_path }}"
       register: hardening
       changed_when: true
-
+      # Ditambahkan agar playbook tidak langsung berhenti saat SSH terputus:
+      ignore_errors: true
+      ignore_unreachable: true
+      
     - name: Show script output
       debug:
         var: hardening.stdout_lines
+      when: hardening.stdout_lines is defined        
 
     - name: Show script error
       debug:
@@ -150,7 +154,8 @@
     - name: Stop if report missing
       fail:
         msg: "Hardening report was not generated."
-      when: "'MISSING' in report_check.stdout"
+ #     when: "'MISSING' in report_check.stdout"
+      when: report_check.stdout is not defined or 'MISSING' in report_check.stdout
 
 #########################################################################
 # SHOW REPORT (RAW)
