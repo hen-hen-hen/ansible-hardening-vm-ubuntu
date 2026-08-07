@@ -1,0 +1,106 @@
+---
+- name: Diagnostic - Cek Konektivitas Execution Environment AWX
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: true
+
+  tasks:
+
+#########################################################################
+# INFO DASAR EXECUTION ENVIRONMENT
+#########################################################################
+
+    - name: Cek isi /etc/resolv.conf (konfigurasi DNS)
+      ansible.builtin.command: cat /etc/resolv.conf
+      register: resolv_conf
+      changed_when: false
+      failed_when: false
+
+    - name: Tampilkan isi resolv.conf
+      debug:
+        var: resolv_conf.stdout_lines
+
+#########################################################################
+# TES DNS RESOLUTION
+#########################################################################
+
+    - name: Tes resolve DNS ke domain internal MinIO (jika pakai hostname)
+      ansible.builtin.command: getent hosts 10.64.1.2
+      register: dns_internal
+      changed_when: false
+      failed_when: false
+
+    - name: Tes resolve DNS ke domain publik (dl.min.io)
+      ansible.builtin.command: getent hosts dl.min.io
+      register: dns_public_minio
+      changed_when: false
+      failed_when: false
+
+    - name: Tes resolve DNS ke domain publik umum (google.com)
+      ansible.builtin.command: getent hosts google.com
+      register: dns_public_google
+      changed_when: false
+      failed_when: false
+
+    - name: Hasil tes DNS
+      debug:
+        msg:
+          - "========================================"
+          - "DNS internal (10.64.1.2)  : {{ 'OK - ' + dns_internal.stdout if dns_internal.rc == 0 else 'GAGAL' }}"
+          - "DNS dl.min.io             : {{ 'OK - ' + dns_public_minio.stdout if dns_public_minio.rc == 0 else 'GAGAL' }}"
+          - "DNS google.com            : {{ 'OK - ' + dns_public_google.stdout if dns_public_google.rc == 0 else 'GAGAL' }}"
+          - "========================================"
+
+#########################################################################
+# TES KONEKTIVITAS LANGSUNG (TANPA DNS, PAKAI IP)
+#########################################################################
+
+    - name: Tes koneksi TCP ke MinIO endpoint (10.64.1.2:9000)
+      ansible.builtin.command: curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://10.64.1.2:9000
+      register: curl_minio
+      changed_when: false
+      failed_when: false
+
+    - name: Tes koneksi TCP ke internet publik (pakai IP Google DNS 8.8.8.8)
+      ansible.builtin.command: curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://8.8.8.8
+      register: curl_public_ip
+      changed_when: false
+      failed_when: false
+
+    - name: Tes koneksi HTTPS ke dl.min.io (domain, butuh DNS)
+      ansible.builtin.command: curl -sv --max-time 5 https://dl.min.io
+      register: curl_dlminio
+      changed_when: false
+      failed_when: false
+
+    - name: Hasil tes koneksi
+      debug:
+        msg:
+          - "========================================"
+          - "Koneksi ke MinIO (10.64.1.2:9000)        : rc={{ curl_minio.rc }}, http_code={{ curl_minio.stdout }}"
+          - "Koneksi ke IP publik (8.8.8.8)            : rc={{ curl_public_ip.rc }} ({{ 'ADA akses internet by IP' if curl_public_ip.rc == 0 else 'TIDAK ADA akses internet by IP' }})"
+          - "Koneksi ke dl.min.io (via domain/DNS)     : rc={{ curl_dlminio.rc }} ({{ 'BERHASIL' if curl_dlminio.rc == 0 else 'GAGAL' }})"
+          - "========================================"
+
+#########################################################################
+# KESIMPULAN OTOMATIS
+#########################################################################
+
+    - name: Kesimpulan diagnosa
+      debug:
+        msg: >-
+          {%- if curl_public_ip.rc == 0 and dns_public_google.rc != 0 -%}
+          KESIMPULAN: Execution Environment PUNYA akses internet, tapi DNS resolver-nya BERMASALAH
+          (tidak bisa resolve nama domain). Perlu perbaikan konfigurasi DNS (/etc/resolv.conf)
+          di container/EE, atau tambahkan proxy DNS internal.
+          {%- elif curl_public_ip.rc != 0 -%}
+          KESIMPULAN: Execution Environment TIDAK PUNYA akses internet sama sekali
+          (baik DNS maupun koneksi IP langsung gagal). Ini environment internal-only/air-gapped.
+          Solusi: host file mc secara internal (misal taruh di bucket MinIO sendiri atau
+          web server internal), JANGAN andalkan download dari internet publik.
+          {%- else -%}
+          KESIMPULAN: Execution Environment PUNYA akses internet dan DNS berfungsi normal.
+          Masalah download mc kemungkinan sementara/spesifik ke dl.min.io saja - coba ulang
+          atau cek apakah dl.min.io sedang down.
+          {%- endif %}
