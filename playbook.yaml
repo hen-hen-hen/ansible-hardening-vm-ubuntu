@@ -146,27 +146,6 @@
         - hardening.stderr is defined
         - hardening.stderr | default('') | length > 0
 
-#########################################################################
-# READ REPORT FROM TARGET (RAW, ANTI-DISCONNECT & WILDCARD)
-#########################################################################
-
-    - name: Read report content from target (raw with retry)
-      raw: "cat {{ remote_script_dir }}/hardening-{{ inventory_hostname }}-*.txt"
-      register: report_raw_content
-      until: report_raw_content.rc is defined and report_raw_content.rc == 0
-      retries: 15
-      delay: 10
-      ignore_errors: true
-      changed_when: false
-
-    - name: Stop if report missing or unreadable
-      fail:
-        msg: "Hardening report was not generated."
-      when: report_raw_content.rc is not defined or report_raw_content.rc != 0
-
-    - name: Display report (raw)
-      debug:
-        var: report_raw_content.stdout_lines
 
 #########################################################################
 # TARIK FILE LAPORAN KE VM ANSIBLE (STORAGE_HOST) VIA RAW SCP (BEBAS PYTHON)
