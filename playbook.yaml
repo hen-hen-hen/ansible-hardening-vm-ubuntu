@@ -240,11 +240,9 @@
 
     - name: Upload report to MinIO using mc
       delegate_to: localhost
-      # Tambahkan baris ini agar Ansible membaca binary mc menggunakan hak akses root lokal
-      become: true
-      command: >
-        /usr/local/bin/mc cp {{ local_report_path }}
-        {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}
+      # Menggunakan modul shell (bukan command) agar bisa membaca environment sistem
+      ansible.builtin.shell: |
+        mc cp "{{ local_report_path }}" "{{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}"
       register: upload_result
       changed_when: true
       when: not is_duplicate
@@ -260,13 +258,16 @@
 
     - name: Verify object exists in MinIO bucket
       delegate_to: localhost
-      # Tambahkan become: true di sini juga
-      become: true
-      command: "/usr/local/bin/mc stat {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}"
+      ansible.builtin.shell: |
+        mc stat "{{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}"
       register: mc_stat_result
       changed_when: false
       failed_when: mc_stat_result.rc != 0
 
+    - name: Upload validation
+      fail:
+        msg: "Upload report ke MinIO gagal untuk {{ report_name }}."
+      when: mc_stat_result.rc != 0
 
 
 #########################################################################
