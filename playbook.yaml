@@ -265,21 +265,27 @@
       when: is_duplicate
 
 #########################################################################
-# UPLOAD REPORT TO MINIO USING MC (RAW - DENGAN PASS-THROUGH ENVIRONMENT)
+# UPLOAD REPORT TO MINIO USING MC (RAW - INTERACTIVE SHELL BASHRC)
 #########################################################################
 
     - name: Upload report to MinIO using mc (raw)
       delegate_to: "{{ storage_host }}"
-      # Menyuntikkan langsung variabel dari OS lokal VM Ansible ke dalam sesi kerja task ini
-      environment:
-        MINIO_ACCESS_KEY: "{{ lookup('env', 'MINIO_ACCESS_KEY') }}"
-        MINIO_SECRET_KEY: "{{ lookup('env', 'MINIO_SECRET_KEY') }}"
+      # 1. HAPUS parameter environment: karena ditolak oleh modul raw
+      # 2. Perintah di bawah dipaksa menjalankan "source /root/.bashrc" terlebih dahulu
+      # 3. Menambahkan parameter --recursive agar objek berbentuk folder maupun file otomatis terunggah tanpa error
       raw: >
-        /usr/local/bin/mc cp --insecure "/opt/linux_hardening_audit2_temp/hardening-{{ inventory_hostname }}-report.txt" 
+        source /root/.bashrc && 
+        /usr/local/bin/mc cp --insecure --recursive "/opt/linux_hardening_audit2_temp/hardening-{{ inventory_hostname }}-report.txt" 
         "http://$MINIO_ACCESS_KEY:$MINIO_SECRET_KEY@10.64.1.2:9000/{{ minio_bucket }}/{{ report_name }}"
       register: upload_result
       changed_when: true
       when: not is_duplicate
+
+    - name: Show upload result
+      debug:
+        var: upload_result.stdout_lines
+      when: not is_duplicate
+
 
 
 #########################################################################
