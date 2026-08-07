@@ -1,5 +1,6 @@
 ---
-- name: Linux Hardening Audit (Raw Mode - Tanpa Python di Target)
+
+- name: Linux Hardening Audit RAW Mode - MinIO Upload
   hosts: all
   become: true
   gather_facts: false
@@ -7,293 +8,355 @@
   vars:
 
     #############################################
-    # Script Hardening
-    # NOTE: jika script sudah ada di host target,
-    # transfer akan di-skip otomatis (idempoten)
+    # SCRIPT HARDENING
     #############################################
 
     script_name: linux_hardening_audit2.sh
+
     remote_script_dir: /opt/linux_hardening_audit2_temp
+
     remote_script: "{{ remote_script_dir }}/{{ script_name }}"
 
-    # inventory_hostname dipakai (bukan ansible_hostname),
-    # karena gather_facts dimatikan sehingga ansible_hostname
-    # tidak tersedia.
-    report_name: "hardening-{{ inventory_hostname }}-{{ lookup('pipe', 'date +%F_%H-%M-%S') }}.txt"
-    report_path: "{{ remote_script_dir }}/{{ report_name }}"
 
     #############################################
-    # Penyimpanan Lokal di VM Ansible
+    # LOCAL STORAGE (VM ANSIBLE)
     #############################################
 
     local_report_dir: "/opt/linux_hardening_audit2_temp"
-    local_report_path: "{{ local_report_dir }}/{{ report_name }}"
+
+    local_report_path: "{{ local_report_dir }}/{{ report_name | default('unknown.txt') }}"
+
 
     #############################################
-    # MinIO Client (mc)
-    # NOTE: mc sudah diinstall & alias sudah dikonfigurasi
-    # manual di VM Ansible ini, contoh:
-    #   mc alias set minio-server-hardening-linux \
-    #     http://10.64.1.2:9000 <access_key> <secret_key>
+    # MINIO
     #############################################
 
     minio_bucket: "hardening-linux"
+
     minio_alias: "minio-server-hardening-linux"
 
     mc_binary_path: "/usr/local/bin/mc"
 
+
+
   tasks:
 
-#########################################################################
-# HOST INFORMATION (RAW, TANPA GATHER FACTS)
-#########################################################################
+    #############################################
+    # IDENTIFICATION
+    #############################################
 
-    - name: IDENTIFIER - Linux Hardening Audit (raw mode)
-      raw: 'echo "Playbook loaded - Linux Hardening Audit (raw mode)"'
+    - name: Identifier
+      raw: |
+        echo "Linux Hardening Audit RAW Mode Started"
       changed_when: false
 
-    - name: Get hostname (raw)
-      raw: hostname
+
+    - name: Get hostname
+      raw: |
+        hostname
       register: raw_hostname
       changed_when: false
 
-    - name: Get IP address (raw)
-      raw: "hostname -I | awk '{print $1}'"
+
+    - name: Get IP Address
+      raw: |
+        hostname -I | awk '{print $1}'
       register: raw_ip
       changed_when: false
 
-    - name: Get OS info (raw)
-      raw: "cat /etc/os-release | grep -E '^(NAME|VERSION)=' | tr -d '\"'"
+
+    - name: Get OS Information
+      raw: |
+        cat /etc/os-release | grep -E '^(NAME|VERSION)' | tr -d '"'
       register: raw_os
       changed_when: false
 
-    - name: Display target information
+
+    - name: Display Host Information
       debug:
         msg:
-          - "========================================"
+          - "================================="
           - "Inventory : {{ inventory_hostname }}"
           - "Hostname  : {{ raw_hostname.stdout | trim }}"
           - "IP        : {{ raw_ip.stdout | trim }}"
-          - "OS        : {{ raw_os.stdout_lines | default([]) }}"
-          - "========================================"
+          - "OS        : {{ raw_os.stdout_lines }}"
+          - "================================="
 
-#########################################################################
-# CREATE WORKING DIRECTORY
-#########################################################################
+
+
+    #############################################
+    # CREATE WORK DIR
+    #############################################
 
     - name: Create working directory
-      raw: "mkdir -p {{ remote_script_dir }}"
+      raw: |
+        mkdir -p {{ remote_script_dir }}
       changed_when: false
 
-#########################################################################
-# ENSURE SCRIPT EXISTS ON TARGET (RAW, TRANSFER HANYA JIKA BELUM ADA)
-#########################################################################
 
-    - name: Check if hardening script already exists on target (raw)
-      raw: "test -f {{ remote_script }} && echo EXISTS || echo MISSING"
-      register: script_check_before
+
+    #############################################
+    # COPY SCRIPT RAW MODE
+    #############################################
+
+    - name: Check script existing
+      raw: |
+        test -f {{ remote_script }} && echo EXISTS || echo MISSING
+      register: script_check
       changed_when: false
 
-    # Transfer file dilakukan dengan encode isi script lokal (di control
-    # node) jadi base64, lalu di-decode kembali langsung di sisi target
-    # lewat raw command. Ini menggantikan modul "copy" yang butuh Python.
-    - name: Transfer hardening script to target (raw, base64)
-      raw: >
-        echo '{{ lookup('file', 'files/' + script_name) | b64encode }}'
-        | base64 -d > {{ remote_script }} && chmod 0755 {{ remote_script }}
-      when: "'MISSING' in script_check_before.stdout"
+
+
+    - name: Copy hardening script
+      raw: |
+        echo '{{ lookup("file", "files/" + script_name) | b64encode }}' \
+        | base64 -d > {{ remote_script }}
+
+        chmod 0755 {{ remote_script }}
+
+      when:
+        - "'MISSING' in script_check.stdout"
+
+
+
+    - name: Verify script
+      raw: |
+        test -f {{ remote_script }} && echo EXISTS || echo FAILED
+      register: script_verify
+      changed_when: false
+
+
+
+    - name: Fail if script missing
+      fail:
+        msg: "Script tidak ditemukan {{ remote_script }}"
+      when:
+        - "'FAILED' in script_verify.stdout"
+
+
+
+    #############################################
+    # EXECUTE SCRIPT
+    # IMPORTANT:
+    # SCRIPT TIDAK DIBERI PARAMETER
+    #############################################
+
+    - name: Execute hardening script
+      raw: |
+        cd {{ remote_script_dir }}
+
+        {{ remote_script }}
+
+      register: hardening_result
+
       changed_when: true
 
-    - name: Verify hardening script exists after transfer (raw)
-      raw: "test -f {{ remote_script }} && echo EXISTS || echo MISSING"
-      register: script_check_after
-      changed_when: false
 
-    - name: Stop if hardening script still not found
-      fail:
-        msg: >
-          Script hardening tidak ditemukan/berhasil ditransfer ke
-          {{ remote_script }} pada host {{ inventory_hostname }}.
-      when: "'MISSING' in script_check_after.stdout"
 
-    - name: Ensure script is executable (raw)
-      raw: "chmod 0755 {{ remote_script }}"
-      changed_when: false
-
-#########################################################################
-# EXECUTE SCRIPT (RAW)
-#########################################################################
-
-    - name: Execute hardening script (raw)
-      raw: "{{ remote_script }} {{ report_path }}"
-      register: hardening
-      changed_when: true
-
-    - name: Show script output
+    - name: Show script stdout
       debug:
-        var: hardening.stdout_lines
+        var: hardening_result.stdout_lines
 
-    - name: Show script error
-      debug:
-        var: hardening.stderr_lines
-      when: hardening.stderr | default('') | length > 0
 
-#########################################################################
-# VERIFY REPORT (REMOTE, RAW)
-#########################################################################
 
-    - name: Verify report exists (raw)
-      raw: "test -f {{ report_path }} && echo EXISTS || echo MISSING"
-      register: report_check
+    #############################################
+    # DETECT REPORT RESULT
+    #############################################
+
+    - name: Detect generated txt report
+      raw: |
+        find {{ remote_script_dir }} \
+        -maxdepth 1 \
+        -type f \
+        -name "*.txt" \
+        -printf "%T@ %p\n" \
+        | sort -nr \
+        | head -1 \
+        | cut -d' ' -f2
+
+      register: detected_report
+
       changed_when: false
 
-    - name: Stop if report missing
+
+
+    - name: Validate report detected
       fail:
-        msg: "Hardening report was not generated."
-      when: "'MISSING' in report_check.stdout"
+        msg: |
+          Report TXT tidak ditemukan.
 
-#########################################################################
-# SHOW REPORT (RAW)
-#########################################################################
+          Directory:
+          {{ remote_script_dir }}
 
-    - name: Display report (raw)
-      raw: "cat {{ report_path }}"
+          Output:
+          {{ detected_report.stdout }}
+
+      when:
+        - detected_report.stdout | trim == ""
+
+
+
+    - name: Set report variable
+      set_fact:
+
+        report_path: "{{ detected_report.stdout | trim }}"
+
+        report_name: "{{ detected_report.stdout | trim | basename }}"
+
+
+
+    - name: Show detected report
+      debug:
+        msg:
+          - "Report ditemukan:"
+          - "{{ report_path }}"
+    #############################################
+    # DISPLAY REPORT CONTENT
+    #############################################
+
+    - name: Read hardening report
+      raw: |
+        cat "{{ report_path }}"
       register: report_content
       changed_when: false
 
-    - debug:
+
+    - name: Display hardening report
+      debug:
         var: report_content.stdout_lines
 
-#########################################################################
-# PREPARE LOCAL STORAGE (ANSIBLE VM - PYTHON TERSEDIA DI SINI)
-#########################################################################
 
-    - name: Ensure local temp directory exists on Ansible VM
+
+    #############################################
+    # PREPARE LOCAL STORAGE ON ANSIBLE VM
+    #############################################
+
+    - name: Create local report directory
       delegate_to: localhost
       file:
         path: "{{ local_report_dir }}"
         state: directory
         mode: "0755"
 
-#########################################################################
-# FETCH REPORT TO ANSIBLE LOCAL VM (RAW CAT + LOCAL COPY)
-#########################################################################
 
-    # Modul "fetch" butuh Python di remote (via slurp), jadi diganti:
-    # baca isi file lewat raw "cat", lalu simpan hasilnya ke file lokal
-    # dari sisi control node (delegate_to localhost, Python tersedia).
 
-    - name: Read report content from target (raw)
-      raw: "cat {{ report_path }}"
-      register: report_raw_content
-      changed_when: false
+    #############################################
+    # COPY REPORT TO ANSIBLE VM
+    #############################################
 
-    - name: Save report to local Ansible VM
+    - name: Save report to Ansible VM
       delegate_to: localhost
       copy:
-        content: "{{ report_raw_content.stdout }}"
-        dest: "{{ local_report_path }}"
+        content: "{{ report_content.stdout }}"
+        dest: "{{ local_report_dir }}/{{ report_name }}"
+        mode: "0644"
 
-#########################################################################
-# VALIDATE DUPLICATE BEFORE UPLOAD (LOCAL, PYTHON TERSEDIA)
-#########################################################################
 
-    # Catatan: perbandingan checksum ini akurat untuk file yang diupload
-    # sebagai single-part (mc cp untuk file kecil seperti .txt selalu
-    # single-part), karena ETag = MD5 pada kondisi tersebut.
 
-    - name: Compute local report checksum (md5)
+    - name: Verify local report exists
       delegate_to: localhost
       stat:
-        path: "{{ local_report_path }}"
-        checksum_algorithm: md5
-      register: local_report_stat
+        path: "{{ local_report_dir }}/{{ report_name }}"
+      register: local_report_check
 
-    - name: Check if report already exists in MinIO bucket
-      delegate_to: localhost
-      command: "{{ mc_binary_path }} stat {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}"
-      register: mc_remote_stat
-      changed_when: false
-      failed_when: false
 
-    - name: Extract remote ETag (jika object sudah ada)
-      delegate_to: localhost
-      set_fact:
-        remote_etag: "{{ (mc_remote_stat.stdout | regex_search('ETag\\s*:\\s*([a-f0-9]+)', '\\1') | first) | default('') }}"
-      when: mc_remote_stat.rc == 0
 
-    - name: Determine duplicate status
-      delegate_to: localhost
-      set_fact:
-        is_duplicate: "{{ (mc_remote_stat.rc == 0) and (remote_etag | default('') == local_report_stat.stat.checksum) }}"
+    - name: Fail if local report missing
+      fail:
+        msg: |
+          Report gagal disimpan di VM Ansible:
 
-    - name: Show duplicate skip message
-      debug:
-        msg: "File {{ report_name }} sudah ada di bucket dengan checksum identik, upload dilewati (SKIP)."
-      when: is_duplicate
+          {{ local_report_dir }}/{{ report_name }}
 
-#########################################################################
-# UPLOAD REPORT TO MINIO USING MC
-#########################################################################
+      when:
+        - not local_report_check.stat.exists
 
-    - name: Upload report to MinIO using mc
+
+
+    #############################################
+    # UPLOAD TO MINIO
+    #############################################
+
+    - name: Upload report to MinIO
       delegate_to: localhost
       command: >
-        {{ mc_binary_path }} cp {{ local_report_path }}
+        {{ mc_binary_path }}
+        cp
+        {{ local_report_dir }}/{{ report_name }}
         {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}
-      register: upload_result
-      changed_when: true
-      when: not is_duplicate
 
-    - name: Show upload result
+      register: minio_upload
+
+      changed_when: true
+
+
+
+    - name: Display MinIO upload result
       debug:
-        var: upload_result.stdout_lines
-      when: not is_duplicate
+        var: minio_upload.stdout_lines
 
-#########################################################################
-# VERIFY UPLOAD (MC)
-#########################################################################
 
-    - name: Verify object exists in MinIO bucket
+
+    #############################################
+    # VERIFY MINIO OBJECT
+    #############################################
+
+    - name: Verify report in MinIO
       delegate_to: localhost
-      command: "{{ mc_binary_path }} stat {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}"
-      register: mc_stat_result
+      command: >
+        {{ mc_binary_path }}
+        stat
+        {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}
+
+      register: minio_verify
+
       changed_when: false
-      failed_when: mc_stat_result.rc != 0
 
-    - name: Upload validation
-      fail:
-        msg: "Upload report ke MinIO gagal untuk {{ report_name }}."
-      when: mc_stat_result.rc != 0
+      failed_when: minio_verify.rc != 0
 
-#########################################################################
-# CLEANUP REMOTE (RAW)
-#########################################################################
 
-    - name: Remove working directory from target (raw)
-      raw: "rm -rf {{ remote_script_dir }}"
-      changed_when: true
 
-#########################################################################
-# NOTE: LOCAL REPORT FILE
-#########################################################################
-
-    # File laporan lokal sengaja TIDAK dihapus, karena sesuai permintaan
-    # laporan harus tetap tersimpan di {{ local_report_dir }} pada VM Ansible.
-
-#########################################################################
-# SUCCESS
-#########################################################################
+    #############################################
+    # SUCCESS SUMMARY
+    #############################################
 
     - name: Job Summary
       debug:
         msg:
-          - "========================================"
-          - "HOSTNAME     : {{ raw_hostname.stdout | trim }}"
+          - "================================="
           - "STATUS       : SUCCESS"
-          - "LOCAL REPORT : {{ local_report_path }}"
-          - "BUCKET       : {{ minio_bucket }}"
-          - "MINIO ALIAS  : {{ minio_alias }}"
-          - "UPLOAD       : {{ 'SKIPPED (DUPLICATE)' if is_duplicate else 'SUCCESS' }}"
-          - "========================================"
+          - "HOST         : {{ inventory_hostname }}"
+          - "HOSTNAME     : {{ raw_hostname.stdout | trim }}"
+          - "REPORT       : {{ report_name }}"
+          - "LOCAL PATH   : {{ local_report_dir }}/{{ report_name }}"
+          - "MINIO BUCKET : {{ minio_bucket }}"
+          - "UPLOAD       : SUCCESS"
+          - "================================="
 
+
+
+  #############################################
+  # ERROR HANDLING
+  #############################################
+
+  rescue:
+
+    - name: Audit failed summary
+      debug:
+        msg:
+          - "================================="
+          - "STATUS : FAILED"
+          - "HOST   : {{ inventory_hostname }}"
+          - "TASK   : Linux Hardening Audit"
+          - "================================="
+
+
+
+  #############################################
+  # IMPORTANT
+  #
+  # JANGAN DELETE REPORT
+  #
+  # Folder target sengaja dipertahankan
+  # agar hasil audit tetap tersedia.
+  #############################################          
