@@ -23,15 +23,8 @@
     local_report_dir: "/opt/linux_hardening_audit2_temp"
     local_report_path: "{{ local_report_dir }}/{{ report_name }}"
 
-    #############################################
-    # MinIO Client (mc)
-    # NOTE: mc harus sudah terinstall & alias sudah
-    # dikonfigurasi sebelumnya di VM Ansible ini
-    # (mc alias set {{ minio_alias }} {{ minio_endpoint }} <access_key> <secret_key>)
-    #############################################
-
     minio_bucket: "hardening-linux"
-    minio_alias: "miniolocal"
+    minio_alias: "minio-server-hardening-linux"
 
     mc_binary_path: "/usr/local/bin/mc"
 
@@ -136,6 +129,44 @@
         flat: yes
 
 #########################################################################
+# VALIDATE DUPLICATE BEFORE UPLOAD
+#########################################################################
+
+    # Catatan: perbandingan checksum ini akurat untuk file yang diupload
+    # sebagai single-part (mc cp untuk file kecil seperti .txt selalu
+    # single-part), karena ETag = MD5 pada kondisi tersebut.
+
+    - name: Compute local report checksum (md5)
+      delegate_to: localhost
+      stat:
+        path: "{{ local_report_path }}"
+        checksum_algorithm: md5
+      register: local_report_stat
+
+    - name: Check if report already exists in MinIO bucket
+      delegate_to: localhost
+      command: "{{ mc_binary_path }} stat {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}"
+      register: mc_remote_stat
+      changed_when: false
+      failed_when: false
+
+    - name: Extract remote ETag (jika object sudah ada)
+      delegate_to: localhost
+      set_fact:
+        remote_etag: "{{ (mc_remote_stat.stdout | regex_search('ETag\\s*:\\s*([a-f0-9]+)', '\\1') | first) | default('') }}"
+      when: mc_remote_stat.rc == 0
+
+    - name: Determine duplicate status
+      delegate_to: localhost
+      set_fact:
+        is_duplicate: "{{ (mc_remote_stat.rc == 0) and (remote_etag | default('') == local_report_stat.stat.checksum) }}"
+
+    - name: Show duplicate skip message
+      debug:
+        msg: "File {{ report_name }} sudah ada di bucket dengan checksum identik, upload dilewati (SKIP)."
+      when: is_duplicate
+
+#########################################################################
 # UPLOAD REPORT TO MINIO USING MC
 #########################################################################
 
@@ -146,10 +177,12 @@
         {{ minio_alias }}/{{ minio_bucket }}/{{ report_name }}
       register: upload_result
       changed_when: true
+      when: not is_duplicate
 
     - name: Show upload result
       debug:
         var: upload_result.stdout_lines
+      when: not is_duplicate
 
 #########################################################################
 # VERIFY UPLOAD (MC)
@@ -203,5 +236,5 @@
           - "LOCAL REPORT : {{ local_report_path }}"
           - "BUCKET       : {{ minio_bucket }}"
           - "MINIO ALIAS  : {{ minio_alias }}"
-          - "UPLOAD       : SUCCESS"
+          - "UPLOAD       : {{ 'SKIPPED (DUPLICATE)' if is_duplicate else 'SUCCESS' }}"
           - "========================================"
