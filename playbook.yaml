@@ -147,15 +147,18 @@
 #########################################################################
 
     - name: Verify report exists (raw)
-      raw: "test -f {{ report_path }} && echo EXISTS || echo MISSING"
+      # Menggunakan exit code shell: jika file ada exit 0 (sukses), jika tidak ada exit 1 (gagal)
+      raw: "test -f {{ report_path }}"
       register: report_check
+      # Abaikan error shell agar playbook tidak langsung berhenti di sini
+      ignore_errors: true
       changed_when: false
 
     - name: Stop if report missing
       fail:
-        msg: "Hardening report was not generated."
- #     when: "'MISSING' in report_check.stdout"
-      when: report_check.stdout is not defined or 'MISSING' in report_check.stdout
+        msg: "Hardening report was not generated di {{ report_path }}."
+      # Cukup cek rc (return code). Jika rc != 0, artinya file tidak ditemukan.
+      when: report_check.rc is defined and report_check.rc != 0
 
 #########################################################################
 # SHOW REPORT (RAW)
