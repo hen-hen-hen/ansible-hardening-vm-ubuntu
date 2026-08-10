@@ -309,18 +309,16 @@
     # SUMMARY
     #############################################
 
-    - name: Job Summary
-      debug:
-        msg:
-
-          - "======================================"
-          - "STATUS       : SUCCESS"
-          - "HOST         : {{ inventory_hostname }}"
-          - "HOSTNAME     : {{ raw_hostname.stdout | trim }}"
-          - "IP           : {{ ssh_ip }}"
-          - "SSH PORT     : {{ ssh_port }}"          
-          - "REPORT       : {{ final_report_name }}"
-          - "STORAGE HOST : {{ storage_host }}"
-          - "BUCKET       : {{ minio_bucket }}"
-          - "UPLOAD       : SUCCESS"
-          - "======================================"
+- name: Job Summary
+  debug:
+    msg:
+      - "========================================"
+      - "STATUS        : SUCCESS"
+      - "HOST          : {{ inventory_hostname }}"
+      - "ANSIBLE HOST  : {{ ansible_host | default(inventory_hostname) }}"
+      - "ANSIBLE PORT  : {{ ansible_port | default(22) }}"
+      - "REPORT        : {{ final_report_name }}"
+      - "STORAGE HOST  : {{ storage_host }}"
+      - "BUCKET        : {{ minio_bucket }}"
+      - "UPLOAD        : SUCCESS"
+      - "========================================"
