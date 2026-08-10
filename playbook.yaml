@@ -7,21 +7,18 @@
   vars:
 
     script_name: linux_hardening_audit2.sh
-
     remote_script_dir: /opt/linux_hardening_audit2_temp
-
     remote_script: "{{ remote_script_dir }}/{{ script_name }}"
 
     storage_host: lst-svr-henry
-
     storage_report_dir: /opt/linux_hardening_audit2_temp
 
     mc_binary_path: /usr/local/bin/mc
-
     minio_alias: minio-server-hardening-linux
-
     minio_bucket: hardening-linux
 
+    ssh_ip: "{{ ansible_host | default(inventory_hostname) }}"
+    ssh_port: "{{ ansible_port | default(22) }}"
 
   tasks:
 
@@ -56,10 +53,10 @@
           - "Inventory : {{ inventory_hostname }}"
           - "Hostname  : {{ hostname_result.stdout | trim }}"
           - "IP        : {{ ip_result.stdout | trim }}"
+          - "SSH IP    : {{ ssh_ip }}"
+          - "SSH Port  : {{ ssh_port }}"
           - "OS        : {{ os_result.stdout_lines }}"
           - "================================"
-
-
 
     #############################################
     # CREATE TEMP DIRECTORY
@@ -68,10 +65,7 @@
     - name: Create working directory
       raw: |
         mkdir -p {{ remote_script_dir }}
-
       changed_when: false
-
-
 
     #############################################
     # COPY SCRIPT
@@ -82,10 +76,7 @@
         test -f {{ remote_script }} && echo EXISTS || echo MISSING
 
       register: script_check
-
       changed_when: false
-
-
 
     - name: Upload hardening script
       raw: |
@@ -97,8 +88,6 @@
       when:
         - "'MISSING' in script_check.stdout"
 
-
-
     #############################################
     # RUN HARDENING SCRIPT
     #############################################
@@ -106,19 +95,16 @@
     - name: Execute hardening script
       raw: |
         cd {{ remote_script_dir }}
-
         {{ remote_script }}
 
       register: hardening_result
-
       changed_when: true
-
-
 
     - name: Show hardening output
       debug:
         var: hardening_result.stdout_lines
-            #############################################
+
+    #############################################
     # DETECT GENERATED REPORT
     #############################################
 
@@ -131,10 +117,7 @@
         | head -1
 
       register: detected_report
-
       changed_when: false
-
-
 
     - name: Validate generated report
       fail:
@@ -143,15 +126,11 @@
       when:
         - detected_report.stdout | trim == ""
 
-
-
     - name: Show detected report
       debug:
         msg:
           - "Report ditemukan:"
           - "{{ detected_report.stdout | trim }}"
-
-
 
     #############################################
     # CREATE FINAL REPORT NAME
@@ -163,15 +142,10 @@
         final_report_name:
           "linux-hardening-report-{{ inventory_hostname }}-{{ lookup('pipe','date +%Y%m%d-%H%M%S') }}.txt"
 
-
-
     - name: Generate final report path
       set_fact:
-
         final_report_path:
           "{{ remote_script_dir }}/{{ final_report_name }}"
-
-
 
     #############################################
     # MOVE REPORT
@@ -182,8 +156,6 @@
         mv "{{ detected_report.stdout | trim }}" \
         "{{ final_report_path }}"
 
-
-
     - name: Verify final report
       raw: |
         test -f {{ final_report_path }} \
@@ -191,10 +163,7 @@
         || echo FAILED
 
       register: final_report_check
-
       changed_when: false
-
-
 
     - name: Stop if report move failed
       fail:
@@ -203,8 +172,6 @@
       when:
         - "'FAILED' in final_report_check.stdout"
 
-
-
     #############################################
     # READ REPORT
     #############################################
@@ -212,18 +179,12 @@
     - name: Read report content
       raw: |
         cat {{ final_report_path }}
-
       register: report_content
-
       changed_when: false
-
-
 
     - name: Display report
       debug:
         var: report_content.stdout_lines
-
-
 
     #############################################
     # PREPARE STORAGE HOST
@@ -236,8 +197,6 @@
 
       changed_when: false
 
-
-
     #############################################
     # SAVE REPORT TO STORAGE HOST
     #############################################
@@ -248,8 +207,6 @@
         cat > {{ storage_report_dir }}/{{ final_report_name }} <<'EOF'
         {{ report_content.stdout }}
         EOF
-
-
 
     #############################################
     # VERIFY STORAGE REPORT
@@ -263,10 +220,7 @@
         || echo FAILED
 
       register: storage_report_check
-
       changed_when: false
-
-
 
     - name: Fail if storage report missing
       fail:
@@ -274,7 +228,8 @@
 
       when:
         - "'FAILED' in storage_report_check.stdout"
-            #############################################
+
+    #############################################
     # CHECK MINIO CLIENT
     #############################################
 
@@ -286,10 +241,7 @@
         || echo MISSING
 
       register: mc_check
-
       changed_when: false
-
-
 
     - name: Stop if mc missing
       fail:
@@ -315,16 +267,11 @@
         {{ minio_alias }}/{{ minio_bucket }}/{{ final_report_name }}
 
       register: minio_upload
-
       changed_when: true
-
-
 
     - name: Show MinIO upload result
       debug:
         var: minio_upload.stdout_lines
-
-
 
     #############################################
     # VERIFY MINIO OBJECT
@@ -337,10 +284,7 @@
         {{ minio_alias }}/{{ minio_bucket }}/{{ final_report_name }}
 
       register: minio_verify
-
       changed_when: false
-
-
 
     - name: Fail if MinIO verification failed
       fail:
@@ -351,8 +295,6 @@
       when:
         - minio_verify.rc != 0
 
-
-
     #############################################
     # CLEAN ONLY SCRIPT
     #############################################
@@ -362,8 +304,6 @@
         rm -f {{ remote_script }}
 
       changed_when: true
-
-
 
     #############################################
     # SUMMARY
@@ -376,6 +316,9 @@
           - "======================================"
           - "STATUS       : SUCCESS"
           - "HOST         : {{ inventory_hostname }}"
+          - "HOSTNAME     : {{ raw_hostname.stdout | trim }}"
+          - "IP           : {{ ssh_ip }}"
+          - "SSH PORT     : {{ ssh_port }}"          
           - "REPORT       : {{ final_report_name }}"
           - "STORAGE HOST : {{ storage_host }}"
           - "BUCKET       : {{ minio_bucket }}"
